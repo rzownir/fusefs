@@ -1,6 +1,8 @@
 TODO for FuseFS
 ===============
 
+- touch <filename> replaces file with empty string. Find out why, and fix.
+
 - Iron out design and API. I both like and don't like what I have now: A lot of
   code duplication happens because of can_write?, can_delete?, can_rmdir? and
   can_mkdir? ... Can anyone think of a better method?
