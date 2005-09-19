@@ -378,7 +378,10 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     /* We have the body, now save it the entire contents to our
      * opened_file lists. */
     newfile = malloc(sizeof(opened_file));
-    newfile->value = strdup(rb_str2cstr(body,&newfile->size));
+    value = rb_str2cstr(body,&newfile->size);
+    newfile->value = malloc((newfile->size)+1);
+    memcpy(newfile->value,value,newfile->size);
+    newfile->value[newfile->size] = '\0';
     newfile->writesize = 0;
     newfile->zero_offset = 0;
     newfile->path  = strdup(path);
@@ -406,7 +409,9 @@ rf_open(const char *path, struct fuse_file_info *fi) {
       /* We have the body, now save it the entire contents to our
        * opened_file lists. */
       newfile = malloc(sizeof(opened_file));
-      newfile->value = strdup(rb_str2cstr(body,&newfile->size));
+      value = rb_str2cstr(body,&newfile->size);
+      newfile->value = malloc((newfile->size)+1);
+      memcpy(newfile->value,value,newfile->size);
       newfile->writesize = newfile->size+1;
       newfile->path  = strdup(path);
       newfile->zero_offset = 0;
