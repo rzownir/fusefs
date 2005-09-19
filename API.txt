@@ -1,0 +1,194 @@
+FuseFS API DOCUMENT
+===================
+
+Last updated: 2005.09.19 by Greg Millam
+
+WARNING
+-------
+
+FuseFS is still in its VERY early stages, and I'm just a fool when it comes to
+designing things that are actually usable, so the API may very well change.
+(i.e: I really dislike the duplication of code a lot of the can_foo?() and
+foo() methods)
+
+Also: If there are any open files or shells with 'pwd's in your filesystem
+when you exit your ruby script, fuse *might* not actually be unmounted. To
+unmount a path yourself, run the command:
+
+  fusermount -u <path>
+
+to unmount any FUSE filesystems mounted at <path>.
+
+
+FuseFS API
+----------
+
+
+FuseFS provides a layer of abstraction to a programmer who wants to create a
+virtual filesystem via FUSE.
+
+FuseFS programs consist of two parts:
+
+1) FuseFS, which is defined in 'fusefs.rb'
+2) An object that defines a virtual directory. This must define a number of
+   methods (given below, in "Directory Methods" section) in order to be
+   usable.
+
+To write a FuseFS program, you must:
+
+* Define and create a Directory object that responds to the methods required
+  by FuseFS for its desired use.
+
+* Call FuseFS.set_root <virtualdir> with the object defining your virtual
+  directory.
+
+* Mount FuseFS under a real directory on your filesystem.
+
+* Call FuseFS.run to start receiving and executing events.
+
+Happy Filesystem Hacking!
+
+
+Hello World FS
+--------------
+helloworld.rb
+
+This creates a filesystem that contains exactly 1 file: "hello.txt" that, when
+read, returns "Hello, World!"
+
+This is not writable to, and contains no other files.
+
+  require 'fusefs'
+
+  class HelloDir
+    def contents(path)
+      ['hello.txt']
+    end
+    def file?(path)
+      path -- '/hello.txt'
+    end
+    def read_file(path)
+      "Hello, World!\n"
+    end
+  end
+
+  hellodir = HelloDir.new
+  FuseFS.set_root( hellodir )
+
+  # Mount under a directory given on the command line.
+  FuseFS.mount_under ARGV.shift
+  FuseFS.run
+
+
+Directory Methods
+-----------------
+
+Without any methods defined, any object is by default a content-less,
+file-less directory.
+
+The following are necessary for most or all filesystems:
+
+  Directory listing and file type methods:
+
+    contents(path)     # Return an array of file and dirnames within <path>.
+    directory?(path)   # Return true if <path> is a directory.
+    file?(path)        # Return true if <path> is a file.
+
+  File reading:
+
+    read_file(path)    # Return the contents of the file at location <path>.
+
+The following are only necessary if you want a filesystem that can be modified
+by the user. Without defining any of the below, the contents of the filesystem
+are automatically read-only.
+
+  File manipulation:
+
+    can_write?(path)   # Return true if the user can write to file at <path>.
+    write_to(path,str) # Write the contents of <str> to file at <path>.
+
+    can_delete?(path)  # Return true if the user can delete file at <path>.
+    delete(path)       # Delete the file at <path>
+
+  Directory manipulation:
+
+    can_mkdir?(path)   # Return true if user can make a directory at <path>.
+    mkdir(path)        # Make a directory at path.
+
+    can_rmdir?(path)   # Return true if user can remove directory at <path>.
+    rmdir(path)        # Remove it.
+
+module FuseFS
+-------------
+
+FuseFS methods:
+  
+  FuseFS.set_root(object)
+      Set the root virtual directory to <object>. All queries for obtaining
+      file information is directed at object.
+  
+  FuseFS.mount_under(path)
+      This will cause FuseFS to virtually mount itself under the given path.
+      'path' is required to be a valid directory in your actual filesystem.
+
+  FuseFS.run
+      This is the final step to make your virtual filesystem accessible. It is
+      recommended you run this as your main thread, but you can thread off to
+      run this.
+
+  FuseFS.reader_uid and FuseFS.reader_gid
+      When the filesystem is accessed, the accessor's uid or gid is returned
+      by FuseFS.reader_uid and FuseFS.reader_gid. You can use this in
+      determining your permissions, or even provide different files for
+      different users!
+  
+  FuseFS.fuse_fd and FuseFS.proces
+      These are not intended for use by the programmer. If you want to muck
+      with this, read the code to see what they do :D.
+
+
+FuseDir
+----------
+
+FuseFS::FuseDir defines the methods "split_path" and "scan_path". You
+should typically inherit from FuseDir in your own directory objects.
+
+  base, rest = split_path(path)   # base is the file or directory in the
+                                    current context. rest is either nil,
+                                    or a path that is requested. If 'rest'
+                                    exists, then you should recurse the paths.
+  base, *rest = scan_path(path)   # scan_path returns an array of all
+                                    directory and file elements given by
+                                    <path>. This is useful when you're
+                                    encapsulating an entire fs into one
+                                    object.
+
+MetaDir
+-------
+
+MetaDir is a full filesystem defined with hashes. It is writable, and the user
+can create and edit files within it, as well as the programmer.
+
+Usage:
+  root = MetaDir.new
+
+  root.mkdir("/hello")
+  root.write_to("/hello/world","Hello, World!\n")
+  root.write_to("/hello/everybody","Hello, Everybody!\n")
+
+  FuseFS.set_root(root)
+
+Because MetaDir is fully recursive, you can mount your own or other defined
+directory structures under it. For example, to mount a dictionary filesystem
+(as demonstrated in samples/dictfs.rb), use:
+
+  root.mkdir("/dict",DictFS.new)
+
+Conclusion
+----------
+
+Happy Hacking! If you do anything neat with this, please let me know!
+
+My email address is walker@deafcode.com
+
+Thanks for using FuseFS!
