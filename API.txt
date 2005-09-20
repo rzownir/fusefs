@@ -11,6 +11,10 @@ designing things that are actually usable, so the API may very well change.
 (i.e: I really dislike the duplication of code a lot of the can_foo?() and
 foo() methods)
 
+Note: If you use DirLink (in demo.rb) or in any way access a FuseFS filesystem
+from *within* the ruby script accessing the FuseFS, then FuseFS will hang, and
+the only recourse is a kill -KILL.
+
 Also: If there are any open files or shells with 'pwd's in your filesystem
 when you exit your ruby script, fuse *might* not actually be unmounted. To
 unmount a path yourself, run the command:
@@ -90,13 +94,14 @@ The following are necessary for most or all filesystems:
 
   Directory listing and file type methods:
 
-    contents(path)     # Return an array of file and dirnames within <path>.
-    directory?(path)   # Return true if <path> is a directory.
-    file?(path)        # Return true if <path> is a file.
+    :contents(path)     # Return an array of file and dirnames within <path>.
+    :directory?(path)   # Return true if <path> is a directory.
+    :file?(path)        # Return true if <path> is a file.
+    :executable?(path)  # Return true if <path> is an executable _file_.
 
   File reading:
 
-    read_file(path)    # Return the contents of the file at location <path>.
+    :read_file(path)    # Return the contents of the file at location <path>.
 
 The following are only necessary if you want a filesystem that can be modified
 by the user. Without defining any of the below, the contents of the filesystem
@@ -104,19 +109,68 @@ are automatically read-only.
 
   File manipulation:
 
-    can_write?(path)   # Return true if the user can write to file at <path>.
-    write_to(path,str) # Write the contents of <str> to file at <path>.
+    :can_write?(path)   # Return true if the user can write to file at <path>.
+    :write_to(path,str) # Write the contents of <str> to file at <path>.
 
-    can_delete?(path)  # Return true if the user can delete file at <path>.
-    delete(path)       # Delete the file at <path>
+    :can_delete?(path)  # Return true if the user can delete file at <path>.
+    :delete(path)       # Delete the file at <path>
 
   Directory manipulation:
 
-    can_mkdir?(path)   # Return true if user can make a directory at <path>.
-    mkdir(path)        # Make a directory at path.
+    :can_mkdir?(path)   # Return true if user can make a directory at <path>.
+    :mkdir(path)        # Make a directory at path.
 
-    can_rmdir?(path)   # Return true if user can remove directory at <path>.
-    rmdir(path)        # Remove it.
+    :can_rmdir?(path)   # Return true if user can remove directory at <path>.
+    :rmdir(path)        # Remove it.
+
+  Neat "toy":
+
+    :touch(path)        # Called when a file is 'touch'd or otherwise has
+                          their timestamps explicitly modified. I envision
+                          this as a neat toy, maybe you can use it for a
+                          push-button file?
+                            "touch button" -> unmounts fusefs?
+                            "touch musicfile.mp3" -> Play the mp3.
+
+Method call flow
+================
+
+List contents:
+  :directory? will be checked before :contents
+  (Most 'ls' or 'dir' functions will go on next
+   to getattr() for all contents)
+
+Read file:
+  :file? will be checked before :read_file
+
+Getattr
+  :directory? will be checked first.
+
+  :file? will be checked before :can_write?
+  :file? will be checked before :executable?
+
+Writing files:
+  * directory? is usually called on the directory
+    The FS wants to write a new file to, before this
+    can occur.
+  :can_write? will be checked before :write_to
+
+Deleting files:
+  :file? will be checked before :can_delete?
+  :can_delete? will be checked before :delete
+
+Creating dirs:
+  * directory? is usually called on the directory
+    The FS wants to make a new directory in, before
+    this can occur.
+  :directory? will be checked.
+  :can_mkdir? is called only if :directory? is false.
+  :can_mkdir? will be checked before :mkdir
+
+Deleting dirs:
+  :directory? will be checked before :can_rmdir?
+  :can_rmdir? will be checked before :rmdir
+
 
 module FuseFS
 -------------

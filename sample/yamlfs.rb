@@ -41,6 +41,9 @@ class YAMLFS < FuseFS::FuseDir
     end
     node.is_a?(String)
   end
+  def touch(path)
+    puts "#{path} has been pushed like a button!"
+  end
 
   # File reading
   def read_file(path)

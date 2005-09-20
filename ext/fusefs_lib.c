@@ -4,7 +4,15 @@
  * a Rubyish way.
  */
 
-// #include "RubyFuse.h"
+#define DEBUG
+
+/* This is as HACKISH as it gets. */
+
+#ifdef DEBUG
+#define debug printf
+#else
+#define debug // debug
+#endif
 
 #define FUSE_USE_VERSION 22
 #define _FILE_OFFSET_BITS 64
@@ -13,6 +21,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <ruby.h>
 
@@ -33,6 +43,7 @@ time_t init_time;
 typedef struct __opened_file_ {
   char   *path;
   char   *value;
+  int    modified;
   long   writesize;
   long   size;
   long   zero_offset;
@@ -70,11 +81,13 @@ ID id_write_to;
 ID id_remove;
 ID id_mkdir;
 ID id_rmdir;
+ID id_touch;
 
 ID is_directory;
 ID is_file;
-ID is_writable;
-ID is_removable;
+ID is_executable;
+ID can_write;
+ID can_delete;
 ID can_mkdir;
 ID can_rmdir;
 
@@ -150,8 +163,8 @@ rf_getattr(const char *path, struct stat *stbuf) {
   /* Zero out the stat buffer */
   memset(stbuf, 0, sizeof(struct stat));
 
-  /* printf("In getattr for %s!\n", path ); */
-  /* printf("created_file is %s!\n", created_file ); */
+  debug("In getattr for %s!\n", path );
+  debug("created_file is %s!\n", created_file );
 
   /* "/" is automatically a dir. */
   if (strcmp(path,"/") == 0) {
@@ -169,7 +182,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
   /* If we created it with mknod, then it "exists" */
   if (created_file && (strcmp(created_file,path) == 0)) {
     /* It's created */
-    stbuf->st_mode = S_IFREG | 0444;
+    stbuf->st_mode = S_IFREG | 0666;
     stbuf->st_nlink = 1 + file_openedP(path);
     stbuf->st_size = 0;
     stbuf->st_uid = getuid();
@@ -185,7 +198,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
    *
    * Otherwise, -ENOENT */
   if (RTEST(rf_call(path, is_directory,Qnil))) {
-    if (RTEST(rf_call(path,is_writable,Qnil))) {
+    if (RTEST(rf_call(path,can_write,Qnil))) {
       stbuf->st_mode = S_IFDIR | 0777;
     } else {
       stbuf->st_mode = S_IFDIR | 0555;
@@ -199,10 +212,12 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = init_time;
     return 0;
   } else if (RTEST(rf_call(path, is_file,Qnil))) {
-    if (RTEST(rf_call(path,is_writable,Qnil))) {
-      stbuf->st_mode = S_IFREG | 0666;
-    } else {
-      stbuf->st_mode = S_IFREG | 0444;
+    stbuf->st_mode = S_IFREG | 0444;
+    if (RTEST(rf_call(path,can_write,Qnil))) {
+      stbuf->st_mode |= 0666;
+    }
+    if (RTEST(rf_call(path,is_executable,Qnil))) {
+      stbuf->st_mode |= 0111;
     }
     stbuf->st_nlink = 1 + file_openedP(path);
     stbuf->st_size = 0;
@@ -234,7 +249,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   VALUE cur_entry;
   VALUE retval;
 
-  /* printf( "In rf_readdir!\n" ); */
+  debug( "In rf_readdir!\n" );
 
   /* This is what fuse does to turn off 'unused' warnings. */
   (void) offset;
@@ -296,31 +311,32 @@ static int
 rf_mknod(const char *path, mode_t umode, dev_t rdev) {
   opened_file *ptr;
 
+  debug("In mknod!");
   /* Make sure it's not already open. */
   for (ptr = head;ptr != NULL;ptr = ptr->next)
     if (strcmp(ptr->path,path) == 0) break;
   if (ptr)
     return -EACCES;
 
-  /* printf("File isn't open\n"); */
+  debug("File isn't open\n");
 
   /* We ONLY permit regular files. No blocks, characters, fifos, etc. */
   if (!S_ISREG(umode))
     return -EACCES;
 
-  /* printf("It's an IFREG file\n"); */
+  debug("It's an IFREG file\n");
 
   if (RTEST(rf_call(path, is_file,Qnil))) {
     return -EEXIST;
   }
 
-  /* printf( "It doesn't exist\n" ); */
+  debug( "It doesn't exist\n" );
 
   /* Is this writable to */
-  if (!RTEST(rf_call(path,is_writable,Qnil))) {
+  if (!RTEST(rf_call(path,can_write,Qnil))) {
     return -EACCES;
   }
-  /* printf( "It's writable to ...\n"); */
+  debug( "It's writable to ...\n");
 
   if (created_file)
     free(created_file);
@@ -355,13 +371,14 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   size_t len;
   opened_file *newfile;
 
-  /* printf("Open called for %s!\n", path); */
+  debug("Open called for %s!\n", path);
 
   /* Make sure it's not already open. */
   if (file_openedP(path))
     return -EACCES;
 
   if ((fi->flags & 3) == O_RDONLY) {
+    debug("File opened for read.\n");
     /* Open for read. */
     /* Make sure it exists. */
     if (!RTEST(rf_call(path,is_file,Qnil))) {
@@ -384,6 +401,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     newfile->value[newfile->size] = '\0';
     newfile->writesize = 0;
     newfile->zero_offset = 0;
+    newfile->modified = 0;
     newfile->path  = strdup(path);
 
     newfile->next = head;
@@ -393,9 +411,10 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   } else if (((fi->flags & 3) == O_RDWR) ||
              (((fi->flags & 3) == O_WRONLY) && (fi->flags & O_APPEND))) {
     /* Can we write to it? */
-    if (!RTEST(rf_call(path,is_writable,Qnil))) {
+    if (!RTEST(rf_call(path,can_write,Qnil))) {
       return -EACCES;
     }
+    debug("File %s opened for read-write or append.\n", path );
 
     /* Make sure it exists. */
     if (RTEST(rf_call(path,is_file,Qnil))) {
@@ -424,6 +443,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
       newfile->zero_offset = 0;
       *(newfile->value) = '\0';
     }
+    newfile->modified = 0;
 
     if (fi->flags & O_APPEND) {
       newfile->zero_offset = newfile->size;
@@ -433,10 +453,30 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     head = newfile;
     return 0;
   } else if ((fi->flags & 3) == O_WRONLY) {
-    /* printf("Opening for write!\n"); */
+    debug("File %s opened for writing.\n", path );
+    debug("fi->flags is: %x\n", fi->flags & ~3);
+#ifdef DEBUG
+    if (fi->flags & O_APPEND)
+      debug("It's opened for O_APPEND\n");
+    if (fi->flags & O_ASYNC)
+      debug("It's opened for O_ASYNC\n");
+    if (fi->flags & O_CREAT)
+      debug("It's opened for O_CREAT\n");
+    if (fi->flags & O_EXCL)
+      debug("It's opened for O_EXCL\n");
+    if (fi->flags & O_NOCTTY)
+      debug("It's opened for O_NOCTTY\n");
+    if (fi->flags & O_NONBLOCK)
+      debug("It's opened for O_NONBLOCK\n");
+    if (fi->flags & O_SYNC)
+      debug("It's opened for O_SYNC\n");
+    if (fi->flags & O_TRUNC)
+      debug("It's opened for O_TRUNC\n");
+#endif
     /* Open for write. */
     /* Can we write to it? */
-    if (!RTEST(rf_call(path,is_writable,Qnil))) {
+    if (!((created_file && (strcmp(created_file,path) == 0)) ||
+        RTEST(rf_call(path,can_write,Qnil)))) {
       return -EACCES;
     }
 
@@ -448,6 +488,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     newfile->path  = strdup(path);
     newfile->size  = 0;
     newfile->zero_offset = 0;
+    newfile->modified = 0;
     *(newfile->value) = '\0';
 
     newfile->next = head;
@@ -480,31 +521,34 @@ rf_release(const char *path, struct fuse_file_info *fi) {
 
   opened_file *ptr,*prev;
 
-  /* printf("In release for %s!\n", path); */
+  debug("In release for %s!\n", path);
 
+  debug("Looking for opened file ...\n");
+  
   /* Find the opened file. */
   for (ptr = head, prev=NULL;ptr;prev = ptr,ptr = ptr->next)
     if (strcmp(ptr->path,path) == 0) break;
 
-  /* printf("Looking for opened file ...\n"); */
-  
   /* If we don't have this open, it doesn't exist. */
   if (ptr == NULL)
     return -ENOENT;
 
-  /* printf("Found it!\n"); */
+  debug("Found it!\n");
 
   /* Is this a file that was open for write?
    *
    * If so, call write_to. */
   if (ptr->writesize != 0) {
-    /* printf("Write size is nonzero.\n"); */
-    /* printf("size is %d.\n", ptr->size); */
-    /* printf("value is %s.\n", ptr->value); */
-    rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
+    debug("Write size is nonzero.\n");
+    debug("size is %d.\n", ptr->size);
+    debug("value is %s.\n", ptr->value);
+    if (ptr->modified) {
+      debug("File was modified. Saving...\n");
+      rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
+    }
   }
 
-  /* printf("freeing\n"); */
+  debug("freeing\n");
   
   /* Free the file contents. */
   if (prev == NULL) {
@@ -516,6 +560,20 @@ rf_release(const char *path, struct fuse_file_info *fi) {
   free(ptr->path);
   free(ptr);
 
+  return 0;
+}
+
+/* rf_touch
+ *
+ * Used when: A program tries to modify the file's times.
+ *
+ * We use this for a neat side-effect thingy. When a file is touched, we
+ * call the "touch" method. i.e: "touch button" would call
+ * "FuseRoot.touch('/button')" and something *can* happen. =).
+ */
+static int
+rf_touch(const char *path, struct utimebuf *ignore) {
+  rf_call(path,id_touch,Qnil);
   return 0;
 }
 
@@ -533,11 +591,11 @@ rf_rename(const char *path, const char *dest) {
     return -ENOENT;
 
   /* Can we remove the old one? */
-  if (!RTEST(rf_call(path,is_removable,Qnil)))
+  if (!RTEST(rf_call(path,can_delete,Qnil)))
     return -EACCES;
  
   /* Can we create the new one? */
-  if (!RTEST(rf_call(dest,is_writable,Qnil)))
+  if (!RTEST(rf_call(dest,can_write,Qnil)))
     return -EACCES;
 
   /* Copy it over and then remove. */
@@ -560,14 +618,14 @@ rf_rename(const char *path, const char *dest) {
  */
 static int
 rf_unlink(const char *path) {
-  /* printf( "In rf_unlink for %s!\n", path ); */
+  debug( "In rf_unlink for %s!\n", path );
 
   /* Does it exist to be removed? */
   if (!RTEST(rf_call(path,is_file,Qnil)))
     return -ENOENT;
 
   /* Can we remove it? */
-  if (!RTEST(rf_call(path,is_removable,Qnil)))
+  if (!RTEST(rf_call(path,can_delete,Qnil)))
     return -EACCES;
  
   /* Ok, remove it! */
@@ -584,14 +642,14 @@ rf_unlink(const char *path) {
  */
 static int
 rf_truncate(const char *path, off_t offset) {
-  /* printf( "rf_truncate(\"%s\",%d)\n", path, offset ); */
+  debug( "rf_truncate(\"%s\",%d)\n", path, offset );
 
   /* Does it exist to be truncated? */
   if (!RTEST(rf_call(path,is_file,Qnil)))
     return -ENOENT;
 
   /* Can we write to it? */
-  if (!RTEST(rf_call(path,is_removable,Qnil)))
+  if (!RTEST(rf_call(path,can_delete,Qnil)))
     return -EACCES;
  
   /* If offset is 0, then we just overwrite it with an empty file. */
@@ -679,8 +737,8 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
 
   opened_file *ptr;
 
-  /* printf( "In rf_write for %s, write '%s'\n", path, buf ); */
-  /* printf( "Offset is %d\n", offset ); */
+  debug( "In rf_write for %s, write '%s'\n", path, buf );
+  debug( "Offset is %d\n", offset );
 
   /* Find the opened file. */
   for (ptr = head;ptr;ptr = ptr->next)
@@ -690,12 +748,15 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
   if (ptr == NULL)
     return 0;
 
-  /* printf("File %s is open!\n", path); */
+  debug("File %s is open!\n", path);
 
   /* Make sure it's open for read ... */
   if (ptr->writesize == 0) {
     return 0;
   }
+
+  /* Mark it modified. */
+  ptr->modified = 1;
 
   /* We have it, so now we need to write to it. */
   offset += ptr->zero_offset;
@@ -734,7 +795,7 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
 
   opened_file *ptr;
 
-  /* printf( "In rf_read!\n" ); */
+  debug( "In rf_read!\n" );
   /* Find the opened file. */
   for (ptr = head;ptr;ptr = ptr->next)
     if (strcmp(ptr->path,path) == 0) break;
@@ -770,6 +831,7 @@ static struct fuse_operations rf_oper = {
     .rename    = rf_rename,
     .open      = rf_open,
     .release   = rf_release,
+    .utime     = rf_touch,
     .read      = rf_read,
     .write     = rf_write,
 };
@@ -904,13 +966,15 @@ Init_fusefs_lib() {
   id_remove       = rb_intern("delete");
   id_mkdir        = rb_intern("mkdir");
   id_rmdir        = rb_intern("rmdir");
+  id_touch        = rb_intern("touch");
 
-  is_directory = rb_intern("directory?");
-  is_file      = rb_intern("file?");
-  is_writable  = rb_intern("can_write?");
-  is_removable = rb_intern("can_delete?");
-  can_mkdir    = rb_intern("can_mkdir?");
-  can_rmdir    = rb_intern("can_rmdir?");
+  is_directory    = rb_intern("directory?");
+  is_file         = rb_intern("file?");
+  is_executable   = rb_intern("executable?");
+  can_write       = rb_intern("can_write?");
+  can_delete      = rb_intern("can_delete?");
+  can_mkdir       = rb_intern("can_mkdir?");
+  can_rmdir       = rb_intern("can_rmdir?");
 
-  id_dup       = rb_intern("dup");
+  id_dup          = rb_intern("dup");
 }

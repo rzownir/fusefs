@@ -4,11 +4,17 @@ FuseFS CVS
   * read_file borked FuseFS when a binary file was returned. Instead of using
     strdup, it now mallocs according to the returned size, as appropriate.
   * Addition of sample/openurifs.rb
+  * 'touch file' emptied a file, since it opened and then released without
+    writing. I added a 'modified' flag to fix this.
+  * 'touch' method call added, and called when a program attempts to modify
+    a file's time.
+  * 'executable?' check added in case programmer wants to the file to report
+    itself as executable to the filesystem.
 
 FuseFS 0.2
 ==========
 
-  * Fix call for deleting files from "remove" to "delete" to match API spec.
+  * Fix call for deleting files from 'remove' to 'delete' to match API spec.
   * Addition of sample/yamlfs.rb
 
 FuseFS 0.1

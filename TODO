@@ -11,8 +11,6 @@ TODO for FuseFS
 
 - More SampleFS's?
 
-- touch <filename> replaces file with empty string. Find out why, and fix.
-
 - "touch" gets "not implemented" errors because we don't care about
   utime/atime/etc. Implement a stub to just throw away changes.
 
