@@ -1,4 +1,4 @@
-FuseFS CVS
+FuseFS 0.3
 ==========
 
   * read_file borked FuseFS when a binary file was returned. Instead of using
