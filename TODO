@@ -5,16 +5,7 @@ TODO for FuseFS
   code duplication happens because of can_write?, can_delete?, can_rmdir? and
   can_mkdir? ... Can anyone think of a better method?
 
-- Include support for not passing any editor files to the FS. That is: don't
-  pass vim .foo.swp files to FuseRoot, but handle it ourselves. Ditto for emacs
-  and any other editors.
-
-- More SampleFS's?
-
-- "touch" gets "not implemented" errors because we don't care about
-  utime/atime/etc. Implement a stub to just throw away changes.
-
 - Option to include "allow_other" as a fuse mount options. I did this by
   default at first. oops.
 
-- ???
+- Consider FIFOs? We can use FIFOs to mimic TCP internet, if we do this right.

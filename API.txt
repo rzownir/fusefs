@@ -96,8 +96,8 @@ The following are necessary for most or all filesystems:
 
     :contents(path)     # Return an array of file and dirnames within <path>.
     :directory?(path)   # Return true if <path> is a directory.
-    :file?(path)        # Return true if <path> is a file.
-    :executable?(path)  # Return true if <path> is an executable _file_.
+    :file?(path)        # Return true if <path> is a file (not a directory).
+    :executable?(path)  # Return true if <path> is an executable file.
 
   File reading:
 

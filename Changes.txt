@@ -10,6 +10,7 @@ FuseFS CVS
     a file's time.
   * 'executable?' check added in case programmer wants to the file to report
     itself as executable to the filesystem.
+  * vim and emacs swap files are not passed to FuseFS =).
 
 FuseFS 0.2
 ==========

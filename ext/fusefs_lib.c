@@ -4,7 +4,7 @@
  * a Rubyish way.
  */
 
-#define DEBUG
+// #define DEBUG
 
 /* This is as HACKISH as it gets. */
 
@@ -27,6 +27,59 @@
 #include <ruby.h>
 
 #include "fusefs_fuse.h"
+
+/* editor_fileP
+ *
+ * Passed a path, editor_fileP will return if it is likely to be a file
+ * belonging to an editor.
+ *
+ * vim: /path/to/.somename.ext.sw*
+ * emacs: /path/to/#somename.ext#
+ */
+static int
+editor_fileP(const char *path) {
+  char *filename;
+
+  /* Basic checks */
+  filename = strrchr(path,'/');
+  if (!filename) return 0; // No /.
+  filename++;
+  if (!*filename) return 0; // / is the last.
+
+  /* vim */
+  do {
+    // vim uses: .filename.sw?
+    char *ptr = filename;
+    int len;
+    if (*ptr != '.') break;
+
+    // ends with .sw? 
+    ptr = strrchr(ptr,'.');
+    len = strlen(ptr);
+    // .swp or .swpx
+    if (len != 4 && len != 5) break;
+    if (strncmp(ptr,".sw",3) == 0) {
+      debug("I think %s is an editor file.\n", path);
+      return 1; // It's a vim file.
+    }
+  } while (0);
+
+  /* emacs */
+  do {
+    char *ptr = filename;
+    // Begins with a #
+    if (*ptr != '#') break;
+
+    // Ends with a #
+    ptr = strrchr(ptr,'#');
+    if (!ptr) break;
+    // the # must be the end of the filename.
+    ptr++;
+    if (*ptr) break;
+    return 1;
+  } while (0);
+  return 0;
+}
 
 /* init_time
  *
@@ -143,7 +196,6 @@ rf_call(const char *path, ID method, VALUE arg) {
 
   return result;
 }
-
 /* rf_getattr
  *
  * Used when: 'ls', and before opening a file.
@@ -179,6 +231,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
     return 0;
   }
 
+  debug("Did we create it with mknod?\n");
   /* If we created it with mknod, then it "exists" */
   if (created_file && (strcmp(created_file,path) == 0)) {
     /* It's created */
@@ -192,6 +245,13 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = init_time;
     return 0;
   }
+
+  debug("IS it opened?\n");
+  if (file_openedP(path)) {
+    debug("yes\n");
+    return -EACCES;
+  }
+  debug("no.\n");
 
   /* If FuseRoot says the path is a directory, we set it 0555.
    * If FuseRoot says the path is a file, it's 0444.
@@ -313,9 +373,7 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
 
   debug("In mknod!");
   /* Make sure it's not already open. */
-  for (ptr = head;ptr != NULL;ptr = ptr->next)
-    if (strcmp(ptr->path,path) == 0) break;
-  if (ptr)
+  if (file_openedP(path))
     return -EACCES;
 
   debug("File isn't open\n");
@@ -325,6 +383,13 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
     return -EACCES;
 
   debug("It's an IFREG file\n");
+
+  if (editor_fileP(path)) {
+    if (created_file)
+      free(created_file);
+    created_file = strdup(path);
+    return 0;
+  }
 
   if (RTEST(rf_call(path, is_file,Qnil))) {
     return -EEXIST;
@@ -376,6 +441,21 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   /* Make sure it's not already open. */
   if (file_openedP(path))
     return -EACCES;
+  
+  if (editor_fileP(path)) {
+    newfile = malloc(sizeof(opened_file));
+    newfile->writesize = FILE_GROW_SIZE;
+    newfile->value = malloc(newfile->writesize);
+    newfile->path  = strdup(path);
+    newfile->size  = 0;
+    newfile->zero_offset = 0;
+    newfile->modified = 0;
+    *(newfile->value) = '\0';
+
+    newfile->next = head;
+    head = newfile;
+    return 0;
+  }
 
   if ((fi->flags & 3) == O_RDONLY) {
     debug("File opened for read.\n");
@@ -538,7 +618,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
   /* Is this a file that was open for write?
    *
    * If so, call write_to. */
-  if (ptr->writesize != 0) {
+  if ((ptr->writesize != 0) && !editor_fileP(path)) {
     debug("Write size is nonzero.\n");
     debug("size is %d.\n", ptr->size);
     debug("value is %s.\n", ptr->value);
@@ -572,7 +652,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
  * "FuseRoot.touch('/button')" and something *can* happen. =).
  */
 static int
-rf_touch(const char *path, struct utimebuf *ignore) {
+rf_touch(const char *path, struct utimbuf *ignore) {
   rf_call(path,id_touch,Qnil);
   return 0;
 }
@@ -620,6 +700,14 @@ static int
 rf_unlink(const char *path) {
   debug( "In rf_unlink for %s!\n", path );
 
+  if (editor_fileP(path)) {
+    if (created_file && !strcmp(path,created_file)) {
+      free(created_file);
+      created_file = NULL;
+    }
+    return 0;
+  }
+
   /* Does it exist to be removed? */
   if (!RTEST(rf_call(path,is_file,Qnil)))
     return -ENOENT;
@@ -643,6 +731,16 @@ rf_unlink(const char *path) {
 static int
 rf_truncate(const char *path, off_t offset) {
   debug( "rf_truncate(\"%s\",%d)\n", path, offset );
+  if (editor_fileP(path)) {
+    opened_file *ptr;
+    for (ptr = head;ptr;ptr = ptr->next) {
+      if (!strcmp(ptr->path,path)) {
+        ptr->size = offset;
+        return 0;
+      }
+    }
+    return 0;
+  }
 
   /* Does it exist to be truncated? */
   if (!RTEST(rf_call(path,is_file,Qnil)))
