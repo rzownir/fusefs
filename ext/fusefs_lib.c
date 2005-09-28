@@ -4,15 +4,7 @@
  * a Rubyish way.
  */
 
-// #define DEBUG
-
-/* This is as HACKISH as it gets. */
-
-#ifdef DEBUG
-#define debug printf
-#else
-#define debug // debug
-#endif
+/* #define DEBUG /* */
 
 #define FUSE_USE_VERSION 22
 #define _FILE_OFFSET_BITS 64
@@ -26,60 +18,11 @@
 #include <fcntl.h>
 #include <ruby.h>
 
+#ifdef DEBUG
+#include <stdarg.h>
+#endif
+
 #include "fusefs_fuse.h"
-
-/* editor_fileP
- *
- * Passed a path, editor_fileP will return if it is likely to be a file
- * belonging to an editor.
- *
- * vim: /path/to/.somename.ext.sw*
- * emacs: /path/to/#somename.ext#
- */
-static int
-editor_fileP(const char *path) {
-  char *filename;
-
-  /* Basic checks */
-  filename = strrchr(path,'/');
-  if (!filename) return 0; // No /.
-  filename++;
-  if (!*filename) return 0; // / is the last.
-
-  /* vim */
-  do {
-    // vim uses: .filename.sw?
-    char *ptr = filename;
-    int len;
-    if (*ptr != '.') break;
-
-    // ends with .sw? 
-    ptr = strrchr(ptr,'.');
-    len = strlen(ptr);
-    // .swp or .swpx
-    if (len != 4 && len != 5) break;
-    if (strncmp(ptr,".sw",3) == 0) {
-      debug("I think %s is an editor file.\n", path);
-      return 1; // It's a vim file.
-    }
-  } while (0);
-
-  /* emacs */
-  do {
-    char *ptr = filename;
-    // Begins with a #
-    if (*ptr != '#') break;
-
-    // Ends with a #
-    ptr = strrchr(ptr,'#');
-    if (!ptr) break;
-    // the # must be the end of the filename.
-    ptr++;
-    if (*ptr) break;
-    return 1;
-  } while (0);
-  return 0;
-}
 
 /* init_time
  *
@@ -103,12 +46,15 @@ typedef struct __opened_file_ {
   struct __opened_file_ *next;
 } opened_file;
 
-static opened_file *head = NULL;
+typedef opened_file editor_file;
+
+static opened_file *opened_head = NULL;
+static editor_file *editor_head = NULL;
 
 static int
 file_openedP(const char *path) {
   opened_file *ptr;
-  for (ptr = head;ptr; ptr = ptr->next)
+  for (ptr = opened_head;ptr; ptr = ptr->next)
     if (!strcmp(path,ptr->path)) return 1;
   return 0;
 }
@@ -128,23 +74,28 @@ VALUE cFSException = Qnil; /* Our Exception. */
 VALUE FuseRoot     = Qnil; /* The root object we call */
 
 /* IDs for calling methods on objects. */
-ID id_dir_contents;
-ID id_read_file;
-ID id_write_to;
-ID id_remove;
-ID id_mkdir;
-ID id_rmdir;
-ID id_touch;
 
-ID is_directory;
-ID is_file;
-ID is_executable;
-ID can_write;
-ID can_delete;
-ID can_mkdir;
-ID can_rmdir;
+#define RMETHOD(name,cstr) \
+  char *c_ ## name = cstr; \
+  ID name;
 
-ID id_dup;
+RMETHOD(id_dir_contents,"contents");
+RMETHOD(id_read_file,"read_file");
+RMETHOD(id_write_to,"write_to");
+RMETHOD(id_delete,"delete");
+RMETHOD(id_mkdir,"mkdir");
+RMETHOD(id_rmdir,"rmdir");
+RMETHOD(id_touch,"touch");
+
+RMETHOD(is_directory,"directory?");
+RMETHOD(is_file,"file?");
+RMETHOD(is_executable,"executable?");
+RMETHOD(can_write,"can_write?");
+RMETHOD(can_delete,"can_delete?");
+RMETHOD(can_mkdir,"can_mkdir?");
+RMETHOD(can_rmdir,"can_rmdir?");
+
+RMETHOD(id_dup,"dup");
 
 typedef unsigned long int (*rbfunc)();
 
@@ -156,6 +107,101 @@ typedef unsigned long int (*rbfunc)();
 
 static VALUE rb_path;
 static ID to_call;
+
+/* debug()
+ *
+ * If #define DEBUG is enabled, then this acts as a printf to stderr
+ */
+#ifdef DEBUG
+static void
+debug(char *msg,...) {
+  va_list ap;
+  va_start(ap,msg);
+  vfprintf(stderr,msg,ap);
+}
+#else
+// Make debug just comment out what's after it.
+#define debug // debug
+#endif
+
+/* catch_editor_files
+ *
+ * If this is a true value, then FuseFS will attempt to capture
+ * editor swap files and handle them itself, so the ruby filesystem
+ * is not passed swap files it doesn't care about.
+ */
+
+int handle_editor = 1;
+int which_editor  = 0;
+#define EDITOR_VIM    1
+#define EDITOR_EMACS  2
+
+/* editor_fileP
+ *
+ * Passed a path, editor_fileP will return if it is likely to be a file
+ * belonging to an editor.
+ *
+ * vim: /path/to/.somename.ext.sw*
+ * emacs: /path/to/#somename.ext#
+ */
+static int
+editor_fileP(const char *path) {
+  char *filename;
+  editor_file *ptr;
+
+  if (!handle_editor)
+    return 0;
+  
+  /* Already created one */
+  for (ptr = editor_head ; ptr ; ptr = ptr->next) {
+    if (strcasecmp(ptr->path,path) == 0) {
+      return 2;
+    }
+  }
+
+  /* Basic checks */
+  filename = strrchr(path,'/');
+  if (!filename) return 0; // No /.
+  filename++;
+  if (!*filename) return 0; // / is the last.
+
+  /* vim */
+  do {
+    // vim uses: .filename.sw?
+    char *ptr = filename;
+    int len;
+    if (*ptr != '.') break;
+
+    // ends with .sw? 
+    ptr = strrchr(ptr,'.');
+    len = strlen(ptr);
+    // .swp or .swpx
+    if (len != 4 && len != 5) break;
+    if (strncmp(ptr,".sw",3) == 0) {
+      debug("  (%s is a vim file).\n", path);
+      which_editor = EDITOR_VIM;
+      return 1; // It's a vim file.
+    }
+  } while (0);
+
+  /* emacs */
+  do {
+    char *ptr = filename;
+    // Begins with a #
+    if (*ptr != '#') break;
+
+    // Ends with a #
+    ptr = strrchr(ptr,'#');
+    if (!ptr) break;
+    // the # must be the end of the filename.
+    ptr++;
+    if (*ptr) break;
+    debug("  (%s is an emacs file).\n", path);
+    which_editor = EDITOR_EMACS;
+    return 1;
+  } while (0);
+  return 0;
+}
 
 /* rf_protected and rf_call
  *
@@ -178,10 +224,19 @@ rf_protected(VALUE arg) {
   }
 }
 
+#define rf_call(p,m,a) \
+  rf_mcall(p,m, c_ ## m, a)
+
 static VALUE
-rf_call(const char *path, ID method, VALUE arg) {
+rf_mcall(const char *path, ID method, char *methname, VALUE arg) {
   int error;
   VALUE result;
+
+  if (arg == Qnil) {
+    debug("    root.%s(%s)\n", methname, path );
+  } else {
+    debug("    root.%s(%s,...)\n", methname, path );
+  }
 
   if (!rb_respond_to(FuseRoot,method)) {
     return Qnil;
@@ -212,11 +267,9 @@ rf_getattr(const char *path, struct stat *stbuf) {
   char *value;
   size_t len;
 
+  debug("rf_getattr(%s)\n", path );
   /* Zero out the stat buffer */
   memset(stbuf, 0, sizeof(struct stat));
-
-  debug("In getattr for %s!\n", path );
-  debug("created_file is %s!\n", created_file );
 
   /* "/" is automatically a dir. */
   if (strcmp(path,"/") == 0) {
@@ -231,10 +284,11 @@ rf_getattr(const char *path, struct stat *stbuf) {
     return 0;
   }
 
-  debug("Did we create it with mknod?\n");
   /* If we created it with mknod, then it "exists" */
+  debug("  Checking for created file ...");
   if (created_file && (strcmp(created_file,path) == 0)) {
     /* It's created */
+    debug(" created.\n");
     stbuf->st_mode = S_IFREG | 0666;
     stbuf->st_nlink = 1 + file_openedP(path);
     stbuf->st_size = 0;
@@ -245,24 +299,51 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = init_time;
     return 0;
   }
+  debug(" no.\n");
 
-  debug("IS it opened?\n");
+  debug("  Checking file_opened ...");
   if (file_openedP(path)) {
-    debug("yes\n");
-    return -EACCES;
+    debug(" opened.\n");
+    stbuf->st_mode = S_IFREG | 0666;
+    stbuf->st_nlink = 1 + file_openedP(path);
+    stbuf->st_size = 0;
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_mtime = init_time;
+    stbuf->st_atime = init_time;
+    stbuf->st_ctime = init_time;
+    return 0;
   }
-  debug("no.\n");
+  debug(" no.\n");
+
+  debug("  Checking if editor file...");
+  switch (editor_fileP(path)) {
+  case 2:
+    debug(" Yes, and does exist.\n");
+    stbuf->st_mode = S_IFREG | 0444;
+    stbuf->st_nlink = 1;
+    stbuf->st_size = 0;
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_mtime = init_time;
+    stbuf->st_atime = init_time;
+    stbuf->st_ctime = init_time;
+    return 0;
+  case 1:
+    debug(" Yes, but doesn't exist.\n");
+    return -ENOENT;
+  default:
+    debug("No.\n");
+  }
 
   /* If FuseRoot says the path is a directory, we set it 0555.
    * If FuseRoot says the path is a file, it's 0444.
    *
    * Otherwise, -ENOENT */
+  debug("Checking filetype ...");
   if (RTEST(rf_call(path, is_directory,Qnil))) {
-    if (RTEST(rf_call(path,can_write,Qnil))) {
-      stbuf->st_mode = S_IFDIR | 0777;
-    } else {
-      stbuf->st_mode = S_IFDIR | 0555;
-    }
+    debug(" directory.\n");
+    stbuf->st_mode = S_IFDIR | 0555;
     stbuf->st_nlink = 1;
     stbuf->st_size = 4096;
     stbuf->st_uid = getuid();
@@ -272,6 +353,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = init_time;
     return 0;
   } else if (RTEST(rf_call(path, is_file,Qnil))) {
+    debug(" file.\n");
     stbuf->st_mode = S_IFREG | 0444;
     if (RTEST(rf_call(path,can_write,Qnil))) {
       stbuf->st_mode |= 0666;
@@ -288,6 +370,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = init_time;
     return 0;
   }
+  debug(" nonexistant.\n");
   return -ENOENT;
 }
 
@@ -309,7 +392,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   VALUE cur_entry;
   VALUE retval;
 
-  debug( "In rf_readdir!\n" );
+  debug("rf_readdir(%s)\n", path );
 
   /* This is what fuse does to turn off 'unused' warnings. */
   (void) offset;
@@ -326,11 +409,14 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   }
 
   if (strcmp(path,"/") != 0) {
+    debug("  Checking is_directory? ...");
     retval = rf_call(path, is_directory,Qnil);
 
     if (!RTEST(retval)) {
+      debug(" no.\n");
       return -ENOENT;
     }
+    debug(" yes.\n");
   }
  
   /* These two are Always in a directory */
@@ -371,37 +457,82 @@ static int
 rf_mknod(const char *path, mode_t umode, dev_t rdev) {
   opened_file *ptr;
 
-  debug("In mknod!");
+  debug("rf_mknod(%s)\n", path);
   /* Make sure it's not already open. */
-  if (file_openedP(path))
+  
+  debug("  Checking if it's opened ...");
+  if (file_openedP(path)) {
+    debug(" yes.\n");
     return -EACCES;
-
-  debug("File isn't open\n");
+  }
+  debug(" no.\n");
 
   /* We ONLY permit regular files. No blocks, characters, fifos, etc. */
-  if (!S_ISREG(umode))
+  debug("  Checking if an IFREG is requested ...");
+  if (!S_ISREG(umode)) {
+    debug(" no.\n");
     return -EACCES;
+  }
+  debug(" yes.\n");
 
-  debug("It's an IFREG file\n");
-
-  if (editor_fileP(path)) {
-    if (created_file)
-      free(created_file);
-    created_file = strdup(path);
+  debug("  Checking if it's an editor file ...");
+  switch (editor_fileP(path)) {
+  case 2:
+    debug(" yes, and it exists.\n");
+    return -EEXIST;
+  case 1:
+    debug(" yes, and it doesn't exist.\n");
+    editor_file *eptr;
+    eptr = malloc(sizeof(editor_file));
+    eptr->writesize = FILE_GROW_SIZE;
+    eptr->value = malloc(eptr->writesize);
+    eptr->path  = strdup(path);
+    eptr->size  = 0;
+    eptr->zero_offset = 0;
+    eptr->modified = 0;
+    *(eptr->value) = '\0';
+    eptr->next = editor_head;
+    editor_head = eptr;
     return 0;
+  default:
+    debug("no.\n");
   }
 
+  debug("  Checking if it's a file ..." );
   if (RTEST(rf_call(path, is_file,Qnil))) {
+    debug(" yes.\n");
     return -EEXIST;
   }
-
-  debug( "It doesn't exist\n" );
+  debug(" no.\n");
 
   /* Is this writable to */
+  debug("  Checking if it's writable to ...");
   if (!RTEST(rf_call(path,can_write,Qnil))) {
+    debug(" no.\n");
+    debug("  Checking if it looks like an editor tempfile...");
+    if (editor_head && (which_editor == EDITOR_VIM)) {
+      char *ptr = strrchr(path,'/');
+      while (ptr && isdigit(*ptr)) ptr++;
+      if (ptr && (*ptr == '\0')) {
+        debug(" yes.\n");
+        editor_file *eptr;
+        eptr = malloc(sizeof(editor_file));
+        eptr->writesize = FILE_GROW_SIZE;
+        eptr->value = malloc(eptr->writesize);
+        eptr->path  = strdup(path);
+        eptr->size  = 0;
+        eptr->zero_offset = 0;
+        eptr->modified = 0;
+        *(eptr->value) = '\0';
+        eptr->next = editor_head;
+        editor_head = eptr;
+        return 0;
+      }
+    }
+    debug(" no.\n");
     return -EACCES;
   }
-  debug( "It's writable to ...\n");
+  debug(" yes.\n");
 
   if (created_file)
     free(created_file);
@@ -436,29 +567,31 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   size_t len;
   opened_file *newfile;
 
-  debug("Open called for %s!\n", path);
+  debug("rf_open(%s)\n", path);
 
   /* Make sure it's not already open. */
-  if (file_openedP(path))
+  debug("  Checking if it's already open ...");
+  if (file_openedP(path)) {
+    debug(" yes.\n");
     return -EACCES;
-  
-  if (editor_fileP(path)) {
-    newfile = malloc(sizeof(opened_file));
-    newfile->writesize = FILE_GROW_SIZE;
-    newfile->value = malloc(newfile->writesize);
-    newfile->path  = strdup(path);
-    newfile->size  = 0;
-    newfile->zero_offset = 0;
-    newfile->modified = 0;
-    *(newfile->value) = '\0';
-
-    newfile->next = head;
-    head = newfile;
+  }
+  debug(" no.\n");
+ 
+  debug("Checking if an editor file is requested...");
+  switch (editor_fileP(path)) {
+  case 2:
+    debug(" yes, and it was created.\n");
     return 0;
+  case 1:
+    debug(" yes, but it was not created.\n");
+    return -ENOENT;
+  default:
+    debug(" no.\n");
   }
 
+  debug("Checking open type ...");
   if ((fi->flags & 3) == O_RDONLY) {
-    debug("File opened for read.\n");
+    debug(" RDONLY.\n");
     /* Open for read. */
     /* Make sure it exists. */
     if (!RTEST(rf_call(path,is_file,Qnil))) {
@@ -484,17 +617,37 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     newfile->modified = 0;
     newfile->path  = strdup(path);
 
-    newfile->next = head;
-    head = newfile;
+    newfile->next = opened_head;
+    opened_head = newfile;
     return 0;
 
   } else if (((fi->flags & 3) == O_RDWR) ||
              (((fi->flags & 3) == O_WRONLY) && (fi->flags & O_APPEND))) {
     /* Can we write to it? */
+    debug(" RDWR or Append.\n");
+    debug("  Checking if created file ...");
+    if (created_file && (strcmp(created_file,path) == 0)) {
+      debug(" yes.\n");
+      newfile = malloc(sizeof(opened_file));
+      newfile->writesize = FILE_GROW_SIZE;
+      newfile->value = malloc(newfile->writesize);
+      newfile->path  = strdup(path);
+      newfile->size  = 0;
+      newfile->zero_offset = 0;
+      *(newfile->value) = '\0';
+      newfile->modified = 0;
+      newfile->next = opened_head;
+      opened_head = newfile;
+      return 0;
+    }
+    debug(" no\n");
+
+    debug("  Checking if we can write to it...");
     if (!RTEST(rf_call(path,can_write,Qnil))) {
+      debug(" yes.\n");
       return -EACCES;
     }
-    debug("File %s opened for read-write or append.\n", path );
+    debug(" no\n");
 
     /* Make sure it exists. */
     if (RTEST(rf_call(path,is_file,Qnil))) {
@@ -529,36 +682,39 @@ rf_open(const char *path, struct fuse_file_info *fi) {
       newfile->zero_offset = newfile->size;
     }
 
-    newfile->next = head;
-    head = newfile;
+    newfile->next = opened_head;
+    opened_head = newfile;
     return 0;
   } else if ((fi->flags & 3) == O_WRONLY) {
-    debug("File %s opened for writing.\n", path );
-    debug("fi->flags is: %x\n", fi->flags & ~3);
+    debug(" WRONLY.\n");
 #ifdef DEBUG
     if (fi->flags & O_APPEND)
-      debug("It's opened for O_APPEND\n");
+      debug("    It's opened for O_APPEND\n");
     if (fi->flags & O_ASYNC)
-      debug("It's opened for O_ASYNC\n");
+      debug("    It's opened for O_ASYNC\n");
     if (fi->flags & O_CREAT)
-      debug("It's opened for O_CREAT\n");
+      debug("    It's opened for O_CREAT\n");
     if (fi->flags & O_EXCL)
-      debug("It's opened for O_EXCL\n");
+      debug("    It's opened for O_EXCL\n");
     if (fi->flags & O_NOCTTY)
-      debug("It's opened for O_NOCTTY\n");
+      debug("    It's opened for O_NOCTTY\n");
     if (fi->flags & O_NONBLOCK)
-      debug("It's opened for O_NONBLOCK\n");
+      debug("    It's opened for O_NONBLOCK\n");
     if (fi->flags & O_SYNC)
-      debug("It's opened for O_SYNC\n");
+      debug("    It's opened for O_SYNC\n");
     if (fi->flags & O_TRUNC)
-      debug("It's opened for O_TRUNC\n");
+      debug("    It's opened for O_TRUNC\n");
 #endif
+
     /* Open for write. */
     /* Can we write to it? */
+    debug("  Checking if we can write to it ... ");
     if (!((created_file && (strcmp(created_file,path) == 0)) ||
         RTEST(rf_call(path,can_write,Qnil)))) {
+      debug(" no.\n");
       return -EACCES;
     }
+    debug(" yes.\n");
 
     /* We can write to it. Create an opened_write_file entry and initialize
      * it to a small size. */
@@ -571,8 +727,8 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     newfile->modified = 0;
     *(newfile->value) = '\0';
 
-    newfile->next = head;
-    head = newfile;
+    newfile->next = opened_head;
+    opened_head = newfile;
 
     if (created_file && (strcasecmp(created_file,path) == 0)) {
       free(created_file);
@@ -580,6 +736,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     }
     return 0;
   } else {
+    debug(" Unknown...\n");
     return -EACCES;
   }
 }
@@ -600,45 +757,60 @@ static int
 rf_release(const char *path, struct fuse_file_info *fi) {
 
   opened_file *ptr,*prev;
+  int is_editor = 0;
 
-  debug("In release for %s!\n", path);
+  debug("rf_release(%s)\n", path);
 
-  debug("Looking for opened file ...\n");
-  
+  debug("  Checking for opened file ...");
   /* Find the opened file. */
-  for (ptr = head, prev=NULL;ptr;prev = ptr,ptr = ptr->next)
+  for (ptr = opened_head, prev=NULL;ptr;prev = ptr,ptr = ptr->next)
     if (strcmp(ptr->path,path) == 0) break;
 
   /* If we don't have this open, it doesn't exist. */
-  if (ptr == NULL)
+  if (ptr == NULL) {
+    debug(" no.\n");
+    debug(" Checking for opened editor file ...");
+    for (ptr = opened_head, prev=NULL;ptr;prev = ptr,ptr = ptr->next)
+      if (strcmp(ptr->path,path) == 0) {
+        is_editor = 1;
+        break;
+      }
+  }
+  if (ptr == NULL) {
+    debug(" no.\n");
     return -ENOENT;
-
-  debug("Found it!\n");
+  }
+  debug(" yes.\n");
 
   /* Is this a file that was open for write?
    *
    * If so, call write_to. */
+  debug("  Checking if it's for write ...\n");
   if ((ptr->writesize != 0) && !editor_fileP(path)) {
-    debug("Write size is nonzero.\n");
-    debug("size is %d.\n", ptr->size);
-    debug("value is %s.\n", ptr->value);
+    debug(" yes ...");
     if (ptr->modified) {
-      debug("File was modified. Saving...\n");
+      debug(" and modified.\n");
       rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
+    } else {
+      debug(" and not modified.\n");
+      if (!handle_editor) {
+        debug("  ... But calling write anyawy.");
+        rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
+      }
     }
   }
 
-  debug("freeing\n");
-  
   /* Free the file contents. */
-  if (prev == NULL) {
-    head = ptr->next;
-  } else {
-    prev->next = ptr->next;
+  if (!is_editor) {
+    if (prev == NULL) {
+      opened_head = ptr->next;
+    } else {
+      prev->next = ptr->next;
+    }
+    free(ptr->value);
+    free(ptr->path);
+    free(ptr);
   }
-  free(ptr->value);
-  free(ptr->path);
-  free(ptr);
 
   return 0;
 }
@@ -653,6 +825,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
  */
 static int
 rf_touch(const char *path, struct utimbuf *ignore) {
+  debug("rf_touch(%s)\n", path);
   rf_call(path,id_touch,Qnil);
   return 0;
 }
@@ -667,25 +840,65 @@ rf_touch(const char *path, struct utimbuf *ignore) {
 static int
 rf_rename(const char *path, const char *dest) {
   /* Does it exist to be edited? */
-  if (!RTEST(rf_call(path,is_file,Qnil)))
-    return -ENOENT;
+  int iseditor = 0;
+  if (editor_fileP(path) == 2) {
+    iseditor = 1;
+  } else {
+    debug("rf_rename(%s,%s)\n", path,dest);
+    debug("  Checking if %s is file ...", path);
+    if (!RTEST(rf_call(path,is_file,Qnil))) {
+      debug(" no.\n");
+      return -ENOENT;
+    }
+    debug(" yes.\n");
 
-  /* Can we remove the old one? */
-  if (!RTEST(rf_call(path,can_delete,Qnil)))
-    return -EACCES;
+    /* Can we remove the old one? */
+    debug("  Checking if we can delete %s ...", path);
+    if (!RTEST(rf_call(path,can_delete,Qnil))) {
+      debug(" no.\n");
+      return -EACCES;
+    }
+    debug(" yes.\n");
+  }
  
   /* Can we create the new one? */
-  if (!RTEST(rf_call(dest,can_write,Qnil)))
+  debug("  Checking if we can write to %s ...", dest);
+  if (!RTEST(rf_call(dest,can_write,Qnil))) {
+    debug(" no.\n");
     return -EACCES;
+  }
+  debug(" yes.\n");
 
   /* Copy it over and then remove. */
-  VALUE body = rf_call(path,id_read_file,Qnil);
-  if (TYPE(body) != T_STRING) {
-    /* We just write a null file, then. Ah well. */
-    VALUE newstr = rb_str_new2("");
-    rf_call(path,id_write_to,newstr);
+  debug("  Copying.\n");
+  if (iseditor) {
+    editor_file *eptr,*prev;
+    for (eptr=editor_head,prev=NULL;eptr;prev = eptr,eptr = eptr->next) {
+      if (strcmp(path,eptr->path) == 0) {
+        if (prev == NULL) {
+          editor_head = eptr->next;
+        } else {
+          prev->next = eptr->next;
+        }
+        VALUE body = rb_str_new(eptr->value,eptr->size);
+        rf_call(dest,id_write_to,body);
+        free(eptr->value);
+        free(eptr->path);
+        free(eptr);
+        break;
+      }
+    }
   } else {
-    rf_call(path,id_write_to,body);
+    VALUE body = rf_call(path,id_read_file,Qnil);
+    if (TYPE(body) != T_STRING) {
+      /* We just write a null file, then. Ah well. */
+      VALUE newstr = rb_str_new2("");
+      rf_call(path,id_delete,Qnil);
+      rf_call(dest,id_write_to,newstr);
+    } else {
+      rf_call(path,id_delete,Qnil);
+      rf_call(dest,id_write_to,body);
+    }
   }
   return 0;
 }
@@ -698,26 +911,52 @@ rf_rename(const char *path, const char *dest) {
  */
 static int
 rf_unlink(const char *path) {
-  debug( "In rf_unlink for %s!\n", path );
+  editor_file *eptr,*prev;
+  debug("rf_unlink(%s)\n",path);
 
-  if (editor_fileP(path)) {
-    if (created_file && !strcmp(path,created_file)) {
-      free(created_file);
-      created_file = NULL;
+  debug("  Checking if it's an editor file ...");
+  switch (editor_fileP(path)) {
+  case 2:
+    debug(" yes. Removing.\n");
+    for (eptr=editor_head,prev=NULL;eptr;prev = eptr,eptr = eptr->next) {
+      if (strcmp(path,eptr->path) == 0) {
+        if (prev == NULL) {
+          editor_head = eptr->next;
+        } else {
+          prev->next = eptr->next;
+        }
+        free(eptr->value);
+        free(eptr->path);
+        free(eptr);
+        return 0;
+      }
     }
-    return 0;
+    return -ENOENT;
+  case 1:
+    debug(" yes, but it wasn't created.\n");
+    return -ENOENT;
   }
+  debug(" no.\n");
 
   /* Does it exist to be removed? */
-  if (!RTEST(rf_call(path,is_file,Qnil)))
+  debug("  Checking if it exists...");
+  if (!RTEST(rf_call(path,is_file,Qnil))) {
+    debug(" no.\n");
     return -ENOENT;
+  }
+  debug(" yes.\n");
 
   /* Can we remove it? */
-  if (!RTEST(rf_call(path,can_delete,Qnil)))
+  debug("  Checking if we can remove it...");
+  if (!RTEST(rf_call(path,can_delete,Qnil))) {
+    debug(" yes.\n");
     return -EACCES;
+  }
+  debug(" no.\n");
  
   /* Ok, remove it! */
-  rf_call(path,id_remove,Qnil);
+  debug("  Removing it.\n");
+  rf_call(path,id_delete,Qnil);
   return 0;
 }
 
@@ -730,10 +969,13 @@ rf_unlink(const char *path) {
  */
 static int
 rf_truncate(const char *path, off_t offset) {
-  debug( "rf_truncate(\"%s\",%d)\n", path, offset );
+  debug( "rf_truncate(%s,%d)\n", path, offset );
+
+  debug("Checking if it's an editor file ... ");
   if (editor_fileP(path)) {
+    debug(" Yes.\n");
     opened_file *ptr;
-    for (ptr = head;ptr;ptr = ptr->next) {
+    for (ptr = opened_head;ptr;ptr = ptr->next) {
       if (!strcmp(ptr->path,path)) {
         ptr->size = offset;
         return 0;
@@ -743,12 +985,14 @@ rf_truncate(const char *path, off_t offset) {
   }
 
   /* Does it exist to be truncated? */
-  if (!RTEST(rf_call(path,is_file,Qnil)))
+  if (!RTEST(rf_call(path,is_file,Qnil))) {
     return -ENOENT;
+  }
 
   /* Can we write to it? */
-  if (!RTEST(rf_call(path,can_delete,Qnil)))
+  if (!RTEST(rf_call(path,can_delete,Qnil))) {
     return -EACCES;
+  }
  
   /* If offset is 0, then we just overwrite it with an empty file. */
   if (offset > 0) {
@@ -782,6 +1026,7 @@ rf_truncate(const char *path, off_t offset) {
  */
 static int
 rf_mkdir(const char *path, mode_t mode) {
+  debug("rf_mkdir(%s)",path);
   /* Does it exist? */
   if (RTEST(rf_call(path,is_directory,Qnil)))
     return -EEXIST;
@@ -806,6 +1051,7 @@ rf_mkdir(const char *path, mode_t mode) {
  */
 static int
 rf_rmdir(const char *path, mode_t mode) {
+  debug("rf_rmdir(%s)",path);
   /* Does it exist? */
   if (!RTEST(rf_call(path,is_directory,Qnil)))
     return -ENOENT;
@@ -832,26 +1078,36 @@ rf_rmdir(const char *path, mode_t mode) {
 static int
 rf_write(const char *path, const char *buf, size_t size, off_t offset,
          struct fuse_file_info *fi) {
+  debug("rf_write(%s)",path);
 
   opened_file *ptr;
 
-  debug( "In rf_write for %s, write '%s'\n", path, buf );
-  debug( "Offset is %d\n", offset );
+  debug( "  Offset is %d\n", offset );
 
+  debug("  Checking if file is open... ");
   /* Find the opened file. */
-  for (ptr = head;ptr;ptr = ptr->next)
+  for (ptr = opened_head;ptr;ptr = ptr->next)
     if (strcmp(ptr->path,path) == 0) break;
 
   /* If we don't have this open, we can't write to it. */
-  if (ptr == NULL)
-    return 0;
+  if (ptr == NULL) {
+    for (ptr = editor_head;ptr;ptr = ptr->next)
+      if (strcmp(ptr->path,path) == 0) break;
+  }
 
-  debug("File %s is open!\n", path);
-
-  /* Make sure it's open for read ... */
-  if (ptr->writesize == 0) {
+  if (ptr == NULL) {
+    debug(" no.\n");
     return 0;
   }
+  debug(" yes.\n");
+
+  /* Make sure it's open for write ... */
+  debug("  Checking if it's open for write ...");
+  if (ptr->writesize == 0) {
+    debug(" no.\n");
+    return 0;
+  }
+  debug(" yes.\n");
 
   /* Mark it modified. */
   ptr->modified = 1;
@@ -890,12 +1146,11 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
 static int
 rf_read(const char *path, char *buf, size_t size, off_t offset,
         struct fuse_file_info *fi) {
-
   opened_file *ptr;
 
-  debug( "In rf_read!\n" );
+  debug( "rf_read(%s)\n", path );
   /* Find the opened file. */
-  for (ptr = head;ptr;ptr = ptr->next)
+  for (ptr = opened_head;ptr;ptr = ptr->next)
     if (strcmp(ptr->path,path) == 0) break;
 
   /* If we don't have this open, it doesn't exist. */
@@ -949,8 +1204,27 @@ rf_set_root(VALUE self, VALUE rootval) {
     return Qnil;
   }
 
-  rb_iv_set(cFuseFS,"@mountpoint",rootval);
+  rb_iv_set(cFuseFS,"@root",rootval);
   FuseRoot = rootval;
+  return Qtrue;
+}
+
+/* rf_handle_editor
+ *
+ * Used by: FuseFS.handle_editor <value>
+ *
+ * If passed a false value, then FuseFS will not attempt to handle editor
+ * swap files on its own, instead passing them to the filesystem as
+ * normal files.
+ */
+VALUE
+rf_handle_editor(VALUE self, VALUE troo) {
+  if (self != cFuseFS) {
+    rb_raise(cFSException,"Error: 'set_root' called outside of FuseFS?!");
+    return Qnil;
+  }
+
+  handle_editor = RTEST(troo);
   return Qtrue;
 }
 
@@ -1040,7 +1314,7 @@ rf_gid(VALUE self) {
  */
 void
 Init_fusefs_lib() {
-  head = NULL;
+  opened_head = NULL;
   init_time = time(NULL);
 
   /* module FuseFS */
@@ -1052,27 +1326,37 @@ Init_fusefs_lib() {
   /* def Fuse.run */
   rb_define_singleton_method(cFuseFS,"fuse_fd",     (rbfunc) rf_fd, 0);
   rb_define_singleton_method(cFuseFS,"reader_uid",  (rbfunc) rf_uid, 0);
+  rb_define_singleton_method(cFuseFS,"uid",         (rbfunc) rf_uid, 0);
   rb_define_singleton_method(cFuseFS,"reader_gid",  (rbfunc) rf_gid, 0);
+  rb_define_singleton_method(cFuseFS,"gid",         (rbfunc) rf_gid, 0);
   rb_define_singleton_method(cFuseFS,"process",     (rbfunc) rf_process, 0);
   rb_define_singleton_method(cFuseFS,"mount_to",    (rbfunc) rf_mount_to, 1);
   rb_define_singleton_method(cFuseFS,"mount_under", (rbfunc) rf_mount_to, 1);
+  rb_define_singleton_method(cFuseFS,"mountpoint",  (rbfunc) rf_mount_to, 1);
   rb_define_singleton_method(cFuseFS,"set_root",    (rbfunc) rf_set_root, 1);
+  rb_define_singleton_method(cFuseFS,"root=",       (rbfunc) rf_set_root, 1);
+  rb_define_singleton_method(cFuseFS,"handle_editor",   (rbfunc) rf_handle_editor, 1);
+  rb_define_singleton_method(cFuseFS,"handle_editor=",  (rbfunc) rf_handle_editor, 1);
 
-  id_dir_contents = rb_intern("contents");
-  id_read_file    = rb_intern("read_file");
-  id_write_to     = rb_intern("write_to");
-  id_remove       = rb_intern("delete");
-  id_mkdir        = rb_intern("mkdir");
-  id_rmdir        = rb_intern("rmdir");
-  id_touch        = rb_intern("touch");
+#undef RMETHOD
+#define RMETHOD(name,cstr) \
+  name = rb_intern(cstr);
 
-  is_directory    = rb_intern("directory?");
-  is_file         = rb_intern("file?");
-  is_executable   = rb_intern("executable?");
-  can_write       = rb_intern("can_write?");
-  can_delete      = rb_intern("can_delete?");
-  can_mkdir       = rb_intern("can_mkdir?");
-  can_rmdir       = rb_intern("can_rmdir?");
+  RMETHOD(id_dir_contents,"contents");
+  RMETHOD(id_read_file,"read_file");
+  RMETHOD(id_write_to,"write_to");
+  RMETHOD(id_delete,"delete");
+  RMETHOD(id_mkdir,"mkdir");
+  RMETHOD(id_rmdir,"rmdir");
+  RMETHOD(id_touch,"touch");
 
-  id_dup          = rb_intern("dup");
+  RMETHOD(is_directory,"directory?");
+  RMETHOD(is_file,"file?");
+  RMETHOD(is_executable,"executable?");
+  RMETHOD(can_write,"can_write?");
+  RMETHOD(can_delete,"can_delete?");
+  RMETHOD(can_mkdir,"can_mkdir?");
+  RMETHOD(can_rmdir,"can_rmdir?");
+
+  RMETHOD(id_dup,"dup");
 }

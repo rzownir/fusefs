@@ -40,6 +40,10 @@ Usage
 
   Some sample ruby filesystems are listed in "sample/"
 
+  When you run a fusefs script, it will listen on a socket indefinitely, so
+  either background the script or open another terminal to mosey around in the
+  filesystem.
+
   Also, check the API.txt file for more use.
 
 

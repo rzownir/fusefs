@@ -190,15 +190,23 @@ FuseFS methods:
       recommended you run this as your main thread, but you can thread off to
       run this.
 
+  FuseFS.handle_editor = bool (true by default)
+      If handle_editor is true, then FuseFS will attempt to capture all editor
+      files and prevent them from being passed to FuseRoot. It also prevents
+      created and unmodified files from being passed as well, as vim (among
+      others) will attempt to create and then remove a file that does not
+      exist.
+
   FuseFS.reader_uid and FuseFS.reader_gid
       When the filesystem is accessed, the accessor's uid or gid is returned
       by FuseFS.reader_uid and FuseFS.reader_gid. You can use this in
       determining your permissions, or even provide different files for
       different users!
   
-  FuseFS.fuse_fd and FuseFS.proces
+  FuseFS.fuse_fd and FuseFS.process
       These are not intended for use by the programmer. If you want to muck
       with this, read the code to see what they do :D.
+
 
 
 FuseDir

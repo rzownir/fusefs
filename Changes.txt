@@ -1,3 +1,12 @@
+FuseFS 0.4
+==========
+
+  * Stronger and more robust handling of editor swap files, but still
+    incomplete.
+  * Peppered with debug statements.
+  * A bit cleaner method of calling ruby functions.
+  * rf_rename fixed. Whoops!
+
 FuseFS 0.3
 ==========
 
