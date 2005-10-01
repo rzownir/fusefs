@@ -86,6 +86,7 @@ RMETHOD(id_delete,"delete");
 RMETHOD(id_mkdir,"mkdir");
 RMETHOD(id_rmdir,"rmdir");
 RMETHOD(id_touch,"touch");
+RMETHOD(id_size,"size");
 
 RMETHOD(is_directory,"directory?");
 RMETHOD(is_file,"file?");
@@ -353,6 +354,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = init_time;
     return 0;
   } else if (RTEST(rf_call(path, is_file,Qnil))) {
+    VALUE rsize;
     debug(" file.\n");
     stbuf->st_mode = S_IFREG | 0444;
     if (RTEST(rf_call(path,can_write,Qnil))) {
@@ -362,7 +364,11 @@ rf_getattr(const char *path, struct stat *stbuf) {
       stbuf->st_mode |= 0111;
     }
     stbuf->st_nlink = 1 + file_openedP(path);
-    stbuf->st_size = 0;
+    if (RTEST(rsize = rf_call(path,id_size,Qnil)) && FIXNUM_P(rsize)) {
+      stbuf->st_size = FIX2LONG(rsize);
+    } else {
+      stbuf->st_size = 0;
+    }
     stbuf->st_uid = getuid();
     stbuf->st_gid = getgid();
     stbuf->st_mtime = init_time;
@@ -737,7 +743,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     return 0;
   } else {
     debug(" Unknown...\n");
-    return -EACCES;
+    return -ENOENT;
   }
 }
 
@@ -1349,6 +1355,7 @@ Init_fusefs_lib() {
   RMETHOD(id_mkdir,"mkdir");
   RMETHOD(id_rmdir,"rmdir");
   RMETHOD(id_touch,"touch");
+  RMETHOD(id_size,"size");
 
   RMETHOD(is_directory,"directory?");
   RMETHOD(is_file,"file?");

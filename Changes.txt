@@ -1,3 +1,9 @@
+FuseFS CVS
+==========
+
+  * FuseRoot#size is optionally called to determine file sizes, should the
+    user want a file size to be reported as anything other than 0.
+
 FuseFS 0.4
 ==========
 
