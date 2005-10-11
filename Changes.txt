@@ -1,6 +1,10 @@
 FuseFS CVS
 ==========
 
+  * FuseRoot#raw_open is called with the path and "r" "w" "rw" for read or
+    write modes, along with "a" if it is called for appending.
+  * If raw_open returns true, FuseFS will call raw_read, raw_write, and
+    raw_close at necessary points. (See API.txt)
   * FuseRoot#size is optionally called to determine file sizes, should the
     user want a file size to be reported as anything other than 0.
 

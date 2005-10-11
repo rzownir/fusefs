@@ -6,11 +6,6 @@ Last updated: 2005.09.19 by Greg Millam
 WARNING
 -------
 
-FuseFS is still in its VERY early stages, and I'm just a fool when it comes to
-designing things that are actually usable, so the API may very well change.
-(i.e: I really dislike the duplication of code a lot of the can_foo?() and
-foo() methods)
-
 Note: If you use DirLink (in demo.rb) or in any way access a FuseFS filesystem
 from *within* the ruby script accessing the FuseFS, then FuseFS will hang, and
 the only recourse is a kill -KILL.
@@ -98,6 +93,8 @@ The following are necessary for most or all filesystems:
     :directory?(path)   # Return true if <path> is a directory.
     :file?(path)        # Return true if <path> is a file (not a directory).
     :executable?(path)  # Return true if <path> is an executable file.
+    :size(path)         # Return the file size. Necessary for apache, xmms,
+                          etc.
 
   File reading:
 
@@ -131,6 +128,18 @@ are automatically read-only.
                           push-button file?
                             "touch button" -> unmounts fusefs?
                             "touch musicfile.mp3" -> Play the mp3.
+
+If you want a lower level control of your file, then you can use:
+
+    :raw_open(path,mode)   # mode is "r" "w" or "rw", with "a" if the file
+                             is opened for append. If raw_open returns true,
+                             then the following calls are made:
+    :raw_read(path,off,sz) # Read sz bites from file at path starting at
+                             offset off
+    :raw_write(path,off,sz,buf) # Write sz bites of buf to path starting at
+                                  offset off
+    :raw_close(path)       # Close the file.
+    
 
 Method call flow
 ================

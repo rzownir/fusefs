@@ -43,6 +43,7 @@ typedef struct __opened_file_ {
   long   writesize;
   long   size;
   long   zero_offset;
+  int    raw;
   struct __opened_file_ *next;
 } opened_file;
 
@@ -96,18 +97,14 @@ RMETHOD(can_delete,"can_delete?");
 RMETHOD(can_mkdir,"can_mkdir?");
 RMETHOD(can_rmdir,"can_rmdir?");
 
+RMETHOD(id_raw_open,"raw_open");
+RMETHOD(id_raw_close,"raw_close");
+RMETHOD(id_raw_read,"raw_read");
+RMETHOD(id_raw_write,"raw_write");
+
 RMETHOD(id_dup,"dup");
 
 typedef unsigned long int (*rbfunc)();
-
-/* I'm too lazy to turn everything into a VALUE array
- * for passing to rf_protect, so I'm just doing it
- * this way.
- *
- * Faster, too. */
-
-static VALUE rb_path;
-static ID to_call;
 
 /* debug()
  *
@@ -217,12 +214,9 @@ editor_fileP(const char *path) {
  *   whatever the call returns.
  */
 static VALUE
-rf_protected(VALUE arg) {
-  if (arg == Qnil) {
-    return rb_funcall(FuseRoot,to_call,1,rb_path);
-  } else {
-    return rb_funcall(FuseRoot,to_call,2,rb_path,arg);
-  }
+rf_protected(VALUE args) {
+  ID to_call = SYM2ID(rb_ary_shift(args));
+  return rb_apply(FuseRoot,to_call,args);
 }
 
 #define rf_call(p,m,a) \
@@ -232,6 +226,11 @@ static VALUE
 rf_mcall(const char *path, ID method, char *methname, VALUE arg) {
   int error;
   VALUE result;
+  VALUE methargs;
+
+  if (!rb_respond_to(FuseRoot,method)) {
+    return Qnil;
+  }
 
   if (arg == Qnil) {
     debug("    root.%s(%s)\n", methname, path );
@@ -239,13 +238,20 @@ rf_mcall(const char *path, ID method, char *methname, VALUE arg) {
     debug("    root.%s(%s,...)\n", methname, path );
   }
 
-  if (!rb_respond_to(FuseRoot,method)) {
-    return Qnil;
+  if (TYPE(arg) == T_ARRAY) {
+    methargs = arg;
+  } else if (arg != Qnil) {
+    methargs = rb_ary_new();
+    rb_ary_push(methargs,arg);
+  } else {
+    methargs = rb_ary_new();
   }
+
+  rb_ary_unshift(methargs,rb_str_new2(path));
+  rb_ary_unshift(methargs,ID2SYM(method));
+
   /* Set up the call and make it. */
-  rb_path = rb_str_new2(path);
-  to_call = method;
-  result = rb_protect(rf_protected, arg, &error);
+  result = rb_protect(rf_protected, methargs, &error);
  
   /* Did it error? */
   if (error) return Qnil;
@@ -489,11 +495,12 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
   case 1:
     debug(" yes, and it doesn't exist.\n");
     editor_file *eptr;
-    eptr = malloc(sizeof(editor_file));
+    eptr = ALLOC(editor_file);
     eptr->writesize = FILE_GROW_SIZE;
-    eptr->value = malloc(eptr->writesize);
+    eptr->value = ALLOC_N(char,eptr->writesize);
     eptr->path  = strdup(path);
     eptr->size  = 0;
+    eptr->raw = 0;
     eptr->zero_offset = 0;
     eptr->modified = 0;
     *(eptr->value) = '\0';
@@ -522,10 +529,11 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
       if (ptr && (*ptr == '\0')) {
         debug(" yes.\n");
         editor_file *eptr;
-        eptr = malloc(sizeof(editor_file));
+        eptr = ALLOC(editor_file);
         eptr->writesize = FILE_GROW_SIZE;
-        eptr->value = malloc(eptr->writesize);
+        eptr->value = ALLOC_N(char,eptr->writesize);
         eptr->path  = strdup(path);
+        eptr->raw = 0;
         eptr->size  = 0;
         eptr->zero_offset = 0;
         eptr->modified = 0;
@@ -571,6 +579,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   VALUE body;
   char *value;
   size_t len;
+  char open_opts[4], *optr;
   opened_file *newfile;
 
   debug("rf_open(%s)\n", path);
@@ -595,7 +604,44 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     debug(" no.\n");
   }
 
-  debug("Checking open type ...");
+  optr = open_opts;
+  switch (fi->flags & 3) {
+  case 0:
+    *(optr++) = 'r';
+    break;
+  case 1:
+    *(optr++) = 'w';
+    break;
+  case 2:
+    *(optr++) = 'w';
+    *(optr++) = 'r';
+    break;
+  default:
+    debug("Opening a file with something other than rd, wr, or rdwr?");
+  }
+  if (fi->flags & O_APPEND)
+    *(optr++) = 'a';
+  *(optr) = '\0';
+
+  debug("  Checking for a raw_opened file... ");
+  if (RTEST(rf_call(path,id_raw_open,rb_str_new2(open_opts)))) {
+    debug(" yes.\n");
+    newfile = ALLOC(opened_file);
+    newfile->size = 0;
+    newfile->value = NULL;
+    newfile->writesize = 0;
+    newfile->zero_offset = 0;
+    newfile->modified = 0;
+    newfile->path  = strdup(path);
+    newfile->raw = 1;
+
+    newfile->next = opened_head;
+    opened_head = newfile;
+    return 1;
+  }
+  debug(" no.\n");
+
+  debug("  Checking open type ...");
   if ((fi->flags & 3) == O_RDONLY) {
     debug(" RDONLY.\n");
     /* Open for read. */
@@ -613,15 +659,16 @@ rf_open(const char *path, struct fuse_file_info *fi) {
 
     /* We have the body, now save it the entire contents to our
      * opened_file lists. */
-    newfile = malloc(sizeof(opened_file));
+    newfile = ALLOC(opened_file);
     value = rb_str2cstr(body,&newfile->size);
-    newfile->value = malloc((newfile->size)+1);
+    newfile->value = ALLOC_N(char,(newfile->size)+1);
     memcpy(newfile->value,value,newfile->size);
     newfile->value[newfile->size] = '\0';
     newfile->writesize = 0;
     newfile->zero_offset = 0;
     newfile->modified = 0;
     newfile->path  = strdup(path);
+    newfile->raw = 0;
 
     newfile->next = opened_head;
     opened_head = newfile;
@@ -634,11 +681,12 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     debug("  Checking if created file ...");
     if (created_file && (strcmp(created_file,path) == 0)) {
       debug(" yes.\n");
-      newfile = malloc(sizeof(opened_file));
+      newfile = ALLOC(opened_file);
       newfile->writesize = FILE_GROW_SIZE;
-      newfile->value = malloc(newfile->writesize);
+      newfile->value = ALLOC_N(char,newfile->writesize);
       newfile->path  = strdup(path);
       newfile->size  = 0;
+      newfile->raw = 0;
       newfile->zero_offset = 0;
       *(newfile->value) = '\0';
       newfile->modified = 0;
@@ -666,19 +714,21 @@ rf_open(const char *path, struct fuse_file_info *fi) {
 
       /* We have the body, now save it the entire contents to our
        * opened_file lists. */
-      newfile = malloc(sizeof(opened_file));
+      newfile = ALLOC(opened_file);
       value = rb_str2cstr(body,&newfile->size);
-      newfile->value = malloc((newfile->size)+1);
+      newfile->value = ALLOC_N(char,(newfile->size)+1);
       memcpy(newfile->value,value,newfile->size);
       newfile->writesize = newfile->size+1;
       newfile->path  = strdup(path);
+      newfile->raw = 0;
       newfile->zero_offset = 0;
     } else {
-      newfile = malloc(sizeof(opened_file));
+      newfile = ALLOC(opened_file);
       newfile->writesize = FILE_GROW_SIZE;
-      newfile->value = malloc(newfile->writesize);
+      newfile->value = ALLOC_N(char,newfile->writesize);
       newfile->path  = strdup(path);
       newfile->size  = 0;
+      newfile->raw = 0;
       newfile->zero_offset = 0;
       *(newfile->value) = '\0';
     }
@@ -724,13 +774,14 @@ rf_open(const char *path, struct fuse_file_info *fi) {
 
     /* We can write to it. Create an opened_write_file entry and initialize
      * it to a small size. */
-    newfile = malloc(sizeof(opened_file));
+    newfile = ALLOC(opened_file);
     newfile->writesize = FILE_GROW_SIZE;
-    newfile->value = malloc(newfile->writesize);
+    newfile->value = ALLOC_N(char,newfile->writesize);
     newfile->path  = strdup(path);
     newfile->size  = 0;
     newfile->zero_offset = 0;
     newfile->modified = 0;
+    newfile->raw = 0;
     *(newfile->value) = '\0';
 
     newfile->next = opened_head;
@@ -788,11 +839,21 @@ rf_release(const char *path, struct fuse_file_info *fi) {
   }
   debug(" yes.\n");
 
+  /* If it's opened for raw read/write, call raw_close */
+  debug("  Checking if it's opened for raw write...");
+  if (ptr->raw) {
+    /* raw read */
+    debug(" yes.\n");
+    rf_call(path,id_raw_close,Qnil);
+    return 0;
+  }
+  debug(" no.\n");
+
   /* Is this a file that was open for write?
    *
    * If so, call write_to. */
   debug("  Checking if it's for write ...\n");
-  if ((ptr->writesize != 0) && !editor_fileP(path)) {
+  if ((!ptr->raw) && (ptr->writesize != 0) && !editor_fileP(path)) {
     debug(" yes ...");
     if (ptr->modified) {
       debug(" and modified.\n");
@@ -813,7 +874,8 @@ rf_release(const char *path, struct fuse_file_info *fi) {
     } else {
       prev->next = ptr->next;
     }
-    free(ptr->value);
+    if (ptr->value)
+      free(ptr->value);
     free(ptr->path);
     free(ptr);
   }
@@ -1108,6 +1170,19 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
   debug(" yes.\n");
 
   /* Make sure it's open for write ... */
+  /* If it's opened for raw read/write, call raw_write */
+  debug("  Checking if it's opened for raw write...");
+  if (ptr->raw) {
+    /* raw read */
+    VALUE args = rb_ary_new();
+    debug(" yes.\n");
+    rb_ary_push(args,INT2NUM(offset));
+    rb_ary_push(args,INT2NUM(size));
+    rb_ary_push(args,rb_str_new(buf,size));
+    rf_call(path,id_raw_write,args);
+    return size;
+  }
+  debug(" no.\n");
   debug("  Checking if it's open for write ...");
   if (ptr->writesize == 0) {
     debug(" no.\n");
@@ -1127,7 +1202,7 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
     newsize = offset + size + 1 + FILE_GROW_SIZE;
     newsize -= newsize % FILE_GROW_SIZE;
     ptr->writesize = newsize;
-    ptr->value = realloc(ptr->value, newsize);
+    ptr->value = REALLOC_N(ptr->value, char, newsize);
   }
 
   memcpy(ptr->value + offset, buf, size);
@@ -1146,8 +1221,10 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
  *
  * Used when: A file opened by rf_open is read.
  *
- * This does not access FuseRoot at all. It merely reads from the already-read
- *   'file' that is saved in the opened_file list.
+ * In most cases, this does not access FuseRoot at all. It merely reads from
+ * the already-read 'file' that is saved in the opened_file list.
+ *
+ * For files opened with raw_open, it calls raw_read
  */
 static int
 rf_read(const char *path, char *buf, size_t size, off_t offset,
@@ -1162,6 +1239,16 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
   /* If we don't have this open, it doesn't exist. */
   if (ptr == NULL)
     return -ENOENT;
+
+  /* If it's opened for raw read/write, call raw_read */
+  if (ptr->raw) {
+    /* raw read */
+    VALUE args = rb_ary_new();
+    rb_ary_push(args,INT2NUM(offset));
+    rb_ary_push(args,INT2NUM(size));
+    rf_call(path,id_raw_read,args);
+    return size;
+  }
 
   /* Is there anything left to read? */
   if (offset < ptr->size) {

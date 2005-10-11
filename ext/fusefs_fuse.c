@@ -63,7 +63,7 @@ fusefs_setup(char *mountpoint, const struct fuse_operations *op) {
     return 0;
   }
   /* First, mount us */
-  fusefd = fuse_mount(mountpoint,mount_opts);
+  fusefd = fuse_mount(mountpoint, mount_opts);
   if (fusefd == -1) return 0;
 
   fuse_instance = fuse_new(fusefd, NULL, op, sizeof(*op));
