@@ -4,7 +4,7 @@
  * a Rubyish way.
  */
 
-/* #define DEBUG /* */
+#define DEBUG /* */
 
 #define FUSE_USE_VERSION 22
 #define _FILE_OFFSET_BITS 64
@@ -1451,6 +1451,11 @@ Init_fusefs_lib() {
   RMETHOD(can_delete,"can_delete?");
   RMETHOD(can_mkdir,"can_mkdir?");
   RMETHOD(can_rmdir,"can_rmdir?");
+
+  RMETHOD(id_raw_open,"raw_open");
+  RMETHOD(id_raw_close,"raw_close");
+  RMETHOD(id_raw_read,"raw_read");
+  RMETHOD(id_raw_write,"raw_write");
 
   RMETHOD(id_dup,"dup");
 }
