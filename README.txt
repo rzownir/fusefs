@@ -7,7 +7,7 @@ FuseFS README
     A "hello world" file system equivalent to the one demonstrated on
   fuse.sourceforge.org is just 20 lines of code!
 
-    FuseFS is *NOT* a full implementation of the FUSE api. rufse
+    FuseFS is *NOT* a full implementation of the FUSE api. rfuse
   is designed for that.
 
 

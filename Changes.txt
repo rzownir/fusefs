@@ -1,6 +1,7 @@
 FuseFS CVS
 ==========
 
+  * _why_the_lucky_stiff's railsfs.rb added to the samples/ dir.
   * FuseRoot#raw_open is called with the path and "r" "w" "rw" for read or
     write modes, along with "a" if it is called for appending.
   * If raw_open returns true, FuseFS will call raw_read, raw_write, and
