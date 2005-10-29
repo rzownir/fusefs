@@ -1,6 +1,8 @@
 FuseFS CVS
 ==========
 
+  * Fixed for FUSE 2.4. direct_io turned from a mount option in 2.3 to a lib
+    option in 2.4.
   * _why_the_lucky_stiff's railsfs.rb added to the samples/ dir.
   * FuseRoot#raw_open is called with the path and "r" "w" "rw" for read or
     write modes, along with "a" if it is called for appending.

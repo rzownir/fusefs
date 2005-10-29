@@ -25,7 +25,6 @@
 #include <signal.h>
 
 struct fuse * fuse_instance = NULL;
-static const char *mount_opts = "direct_io";
 static unsigned int fusefd;
 static char *mounted_at = NULL;
 
@@ -55,6 +54,14 @@ fusefs_ehandler() {
 
 int
 fusefs_setup(char *mountpoint, const struct fuse_operations *op) {
+  char *fuse_new_opts = NULL;
+  char *fuse_mount_opts = NULL;
+
+  if (fuse_is_lib_option("direct_io"))
+    fuse_new_opts = "direct_io";
+  else
+    fuse_mount_opts = "direct_io";
+
   fusefd = -1;
   if (fuse_instance != NULL) {
     return 0;
@@ -63,10 +70,10 @@ fusefs_setup(char *mountpoint, const struct fuse_operations *op) {
     return 0;
   }
   /* First, mount us */
-  fusefd = fuse_mount(mountpoint, mount_opts);
+  fusefd = fuse_mount(mountpoint, fuse_mount_opts);
   if (fusefd == -1) return 0;
 
-  fuse_instance = fuse_new(fusefd, NULL, op, sizeof(*op));
+  fuse_instance = fuse_new(fusefd, fuse_new_opts, op, sizeof(*op));
   if (fuse_instance == NULL)
     goto err_unmount;
 
