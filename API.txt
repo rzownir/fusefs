@@ -190,9 +190,23 @@ FuseFS methods:
       Set the root virtual directory to <object>. All queries for obtaining
       file information is directed at object.
   
-  FuseFS.mount_under(path)
+  FuseFS.mount_under(path[,opt[,opt,...]])
       This will cause FuseFS to virtually mount itself under the given path.
       'path' is required to be a valid directory in your actual filesystem.
+
+      'opt's are FUSE options. Most likely, you will only want 'allow_other'
+      or 'allow_root'. The two are mutually exclusive in FUSE, but allow_other
+      will let other users, including root, access your filesystem. allow_root
+      will only allow root to access it.
+      
+      Also available for FuseFS users are:
+        default_permissions, max_read=N, fsname=NAME.
+
+      For more information, look at FUSE.
+
+      (P.S: I know FUSE allows other options, but I don't think any of the
+      rest will do any good with FuseFS. If you think otherwise, please let me
+      know!)
 
   FuseFS.run
       This is the final step to make your virtual filesystem accessible. It is

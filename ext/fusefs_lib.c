@@ -308,7 +308,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
   }
   debug(" no.\n");
 
-  debug("  Checking file_opened ...");
+  /* debug("  Checking file_opened ...");
   if (file_openedP(path)) {
     debug(" opened.\n");
     stbuf->st_mode = S_IFREG | 0666;
@@ -322,6 +322,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
     return 0;
   }
   debug(" no.\n");
+  */
 
   debug("  Checking if editor file...");
   switch (editor_fileP(path)) {
@@ -637,7 +638,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
 
     newfile->next = opened_head;
     opened_head = newfile;
-    return 1;
+    return 0;
   }
   debug(" no.\n");
 
@@ -845,24 +846,24 @@ rf_release(const char *path, struct fuse_file_info *fi) {
     /* raw read */
     debug(" yes.\n");
     rf_call(path,id_raw_close,Qnil);
-    return 0;
-  }
-  debug(" no.\n");
+  } else {
+    debug(" no.\n");
 
-  /* Is this a file that was open for write?
-   *
-   * If so, call write_to. */
-  debug("  Checking if it's for write ...\n");
-  if ((!ptr->raw) && (ptr->writesize != 0) && !editor_fileP(path)) {
-    debug(" yes ...");
-    if (ptr->modified) {
-      debug(" and modified.\n");
-      rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
-    } else {
-      debug(" and not modified.\n");
-      if (!handle_editor) {
-        debug("  ... But calling write anyawy.");
+    /* Is this a file that was open for write?
+     *
+     * If so, call write_to. */
+    debug("  Checking if it's for write ...\n");
+    if ((!ptr->raw) && (ptr->writesize != 0) && !editor_fileP(path)) {
+      debug(" yes ...");
+      if (ptr->modified) {
+        debug(" and modified.\n");
         rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
+      } else {
+        debug(" and not modified.\n");
+        if (!handle_editor) {
+          debug("  ... But calling write anyawy.");
+          rf_call(path,id_write_to,rb_str_new(ptr->value,ptr->size));
+        }
       }
     }
   }
@@ -1246,8 +1247,13 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
     VALUE args = rb_ary_new();
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,INT2NUM(size));
-    rf_call(path,id_raw_read,args);
-    return size;
+    VALUE ret = rf_call(path,id_raw_read,args);
+    if (!RTEST(ret))
+      return 0;
+    if (TYPE(ret) != T_STRING)
+      return 0;
+    memcpy(buf, RSTRING(ret)->ptr, RSTRING(ret)->len);
+    return RSTRING(ret)->len;
   }
 
   /* Is there anything left to read? */
@@ -1321,6 +1327,38 @@ rf_handle_editor(VALUE self, VALUE troo) {
   return Qtrue;
 }
 
+char *valid_options[] = {
+  "default_permissions",
+  "allow_other",
+  "allow_root",
+  "direct_io",
+  "max_read=",
+  "fsname=",
+  NULL
+};
+
+int
+rf_valid_option(char *option) {
+  char opt[32];
+  char *ptr;
+  int i;
+
+  strncpy(opt,option,31);
+
+  if (ptr = strchr(opt,'*')) {
+    ptr++;
+    *ptr = '\0';
+  }
+
+  for (i=0;valid_options[i];i++) {
+    if (!strcasecmp(valid_options[i],opt)) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 /* rf_mount_to
  *
  * Used by: FuseFS.mount_to(dir)
@@ -1328,16 +1366,42 @@ rf_handle_editor(VALUE self, VALUE troo) {
  * FuseFS.mount_to(dir) calls FUSE to mount FuseFS under the given directory.
  */
 VALUE
-rf_mount_to(VALUE self, VALUE mountpoint) {
+rf_mount_to(int argc, VALUE *argv, VALUE self) {
+  int i;
+  char opts[1024];
+  char opts2[1024];
+  char *cur;
+  VALUE mountpoint;
+
+  snprintf(opts,1024,"direct_io");
+
   if (self != cFuseFS) {
     rb_raise(cFSException,"Error: 'mount_to' called outside of FuseFS?!");
     return Qnil;
   }
 
+  if (argc == 0) {
+    rb_raise(rb_eArgError,"mount_to requires at least 1 argument!");
+    return Qnil;
+  }
+
+  mountpoint = argv[0];
+
   Check_Type(mountpoint, T_STRING); 
 
+  for (i = 1;i < argc; i++) {
+    Check_Type(argv[i], T_STRING);
+    cur = STR2CSTR(argv[i]);
+    if (!rf_valid_option(cur)) {
+      rb_raise(rb_eArgError,"mount_under: \"%s\" - invalid argument.", cur);
+      return Qnil;
+    }
+    snprintf(opts2,1024,"%s,%s",opts,STR2CSTR(argv[i]));
+    strcpy(opts,opts2);
+  }
+
   rb_iv_set(cFuseFS,"@mountpoint",mountpoint);
-  fusefs_setup(STR2CSTR(mountpoint), &rf_oper);
+  fusefs_setup(STR2CSTR(mountpoint), &rf_oper, opts);
   return Qtrue;
 }
 
@@ -1423,9 +1487,9 @@ Init_fusefs_lib() {
   rb_define_singleton_method(cFuseFS,"reader_gid",  (rbfunc) rf_gid, 0);
   rb_define_singleton_method(cFuseFS,"gid",         (rbfunc) rf_gid, 0);
   rb_define_singleton_method(cFuseFS,"process",     (rbfunc) rf_process, 0);
-  rb_define_singleton_method(cFuseFS,"mount_to",    (rbfunc) rf_mount_to, 1);
-  rb_define_singleton_method(cFuseFS,"mount_under", (rbfunc) rf_mount_to, 1);
-  rb_define_singleton_method(cFuseFS,"mountpoint",  (rbfunc) rf_mount_to, 1);
+  rb_define_singleton_method(cFuseFS,"mount_to",    (rbfunc) rf_mount_to, -1);
+  rb_define_singleton_method(cFuseFS,"mount_under", (rbfunc) rf_mount_to, -1);
+  rb_define_singleton_method(cFuseFS,"mountpoint",  (rbfunc) rf_mount_to, -1);
   rb_define_singleton_method(cFuseFS,"set_root",    (rbfunc) rf_set_root, 1);
   rb_define_singleton_method(cFuseFS,"root=",       (rbfunc) rf_set_root, 1);
   rb_define_singleton_method(cFuseFS,"handle_editor",   (rbfunc) rf_handle_editor, 1);

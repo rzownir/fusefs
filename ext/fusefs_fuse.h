@@ -9,7 +9,7 @@
 int fusefs_fd();
 int fusefs_unmount();
 int fusefs_ehandler();
-int fusefs_setup(char *mountpoint, const struct fuse_operations *op);
+int fusefs_setup(char *mountpoint, const struct fuse_operations *op, char *opts);
 int fusefs_process();
 int fusefs_uid();
 int fusefs_gid();

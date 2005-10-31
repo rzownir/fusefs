@@ -1,4 +1,15 @@
-FuseFS CVS
+FuseFS 0.6
+==========
+
+  * FuseFS.mount_under() now takes FUSE options as optional arguments, such as
+    'allow_other' and 'allow_root'
+
+FuseFS 0.5.1
+============
+
+  * Bugfix for dealing with raw files (Thanks, Kent Sibilev)
+
+FuseFS 0.5
 ==========
 
   * Fixed for FUSE 2.4. direct_io turned from a mount option in 2.3 to a lib

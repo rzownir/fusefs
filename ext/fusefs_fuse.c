@@ -53,14 +53,36 @@ fusefs_ehandler() {
 }
 
 int
-fusefs_setup(char *mountpoint, const struct fuse_operations *op) {
-  char *fuse_new_opts = NULL;
-  char *fuse_mount_opts = NULL;
+fusefs_setup(char *mountpoint, const struct fuse_operations *op, char *opts) {
+  char fuse_new_opts[1024];
+  char fuse_mount_opts[1024];
+  char nopts[1024];
 
-  if (fuse_is_lib_option("direct_io"))
-    fuse_new_opts = "direct_io";
-  else
-    fuse_mount_opts = "direct_io";
+  char *cur;
+  char *ptr;
+
+  fuse_new_opts[0] = '\0';
+  fuse_mount_opts[0] = '\0';
+
+  for (cur=opts;cur;cur = ptr) {
+    ptr = strchr(cur,',');
+    if (ptr) *(ptr++) = '\0';
+    if (fuse_is_lib_option(cur)) {
+      if (fuse_new_opts[0]) {
+        strcpy(nopts,fuse_new_opts);
+        snprintf(fuse_new_opts,1024,"%s,%s",nopts,cur);
+      } else {
+        snprintf(fuse_new_opts,1024,"%s",cur);
+      }
+    } else {
+      if (fuse_mount_opts[0]) {
+        strcpy(nopts,fuse_mount_opts);
+        snprintf(fuse_mount_opts,1024,"%s,%s",nopts,cur);
+      } else {
+        snprintf(fuse_mount_opts,1024,"%s",cur);
+      }
+    }
+  }
 
   fusefd = -1;
   if (fuse_instance != NULL) {
@@ -69,11 +91,12 @@ fusefs_setup(char *mountpoint, const struct fuse_operations *op) {
   if (mounted_at != NULL) {
     return 0;
   }
+
   /* First, mount us */
-  fusefd = fuse_mount(mountpoint, fuse_mount_opts);
+  fusefd = fuse_mount(mountpoint, fuse_mount_opts[0] ? fuse_mount_opts : NULL);
   if (fusefd == -1) return 0;
 
-  fuse_instance = fuse_new(fusefd, fuse_new_opts, op, sizeof(*op));
+  fuse_instance = fuse_new(fusefd, fuse_new_opts[0] ? fuse_new_opts : NULL, op, sizeof(*op));
   if (fuse_instance == NULL)
     goto err_unmount;
 
