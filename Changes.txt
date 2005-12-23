@@ -3,6 +3,7 @@ FuseFS 0.6
 
   * FuseFS.mount_under() now takes FUSE options as optional arguments, such as
     'allow_other' and 'allow_root'
+  * rmdir now works. (Whoops!)
 
 FuseFS 0.5.1
 ============

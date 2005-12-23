@@ -23,21 +23,21 @@ class YAMLFS < FuseFS::FuseDir
   def contents(path)
     items = scan_path(path)
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.keys.sort
   end
   def directory?(path)
     items = scan_path(path)
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.is_a?(Hash)
   end
   def file?(path)
     items = scan_path(path)
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.is_a?(String)
   end
@@ -49,7 +49,7 @@ class YAMLFS < FuseFS::FuseDir
   def read_file(path)
     items = scan_path(path)
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.to_s
   end
@@ -59,7 +59,7 @@ class YAMLFS < FuseFS::FuseDir
     items = scan_path(path)
     name = items.pop # Last is the filename.
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.is_a?(Hash)
   rescue Exception => er
@@ -69,7 +69,7 @@ class YAMLFS < FuseFS::FuseDir
     items = scan_path(path)
     name = items.pop # Last is the filename.
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node[name] = body
     self.save
@@ -81,7 +81,7 @@ class YAMLFS < FuseFS::FuseDir
   def can_delete?(path)
     items = scan_path(path)
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.is_a?(String)
   rescue Exception => er
@@ -91,7 +91,7 @@ class YAMLFS < FuseFS::FuseDir
     items = scan_path(path)
     name = items.pop # Last is the filename.
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.delete(name)
     self.save
@@ -104,7 +104,7 @@ class YAMLFS < FuseFS::FuseDir
     items = scan_path(path)
     name = items.pop # Last is the filename.
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.is_a?(Hash)
   rescue Exception => er
@@ -114,7 +114,7 @@ class YAMLFS < FuseFS::FuseDir
     items = scan_path(path)
     name = items.pop # Last is the filename.
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node[name] = Hash.new
     self.save
@@ -124,7 +124,7 @@ class YAMLFS < FuseFS::FuseDir
   def can_rmdir?(path)
     items = scan_path(path)
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.is_a?(Hash) && node.empty?
   end
@@ -132,7 +132,7 @@ class YAMLFS < FuseFS::FuseDir
     items = scan_path(path)
     name = items.pop # Last is the filename.
     node = items.inject(@fs) do |node,item|
-      item ? node[item] : item
+      item ? node[item] : node
     end
     node.delete(name)
     self.save

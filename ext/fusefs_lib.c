@@ -1122,11 +1122,13 @@ static int
 rf_rmdir(const char *path, mode_t mode) {
   debug("rf_rmdir(%s)",path);
   /* Does it exist? */
-  if (!RTEST(rf_call(path,is_directory,Qnil)))
-    return -ENOENT;
-
-  if (!RTEST(rf_call(path,is_file,Qnil)))
-    return -ENOTDIR;
+  if (!RTEST(rf_call(path,is_directory,Qnil))) {
+    if (RTEST(rf_call(path,is_file,Qnil))) {
+      return -ENOTDIR;
+    } else {
+      return -ENOENT;
+    }
+  }
 
   /* Can we rmdir it? */
   if (!RTEST(rf_call(path,can_rmdir,Qnil)))
@@ -1279,6 +1281,7 @@ static struct fuse_operations rf_oper = {
     .mknod     = rf_mknod,
     .unlink    = rf_unlink,
     .mkdir     = rf_mkdir,
+    .rmdir     = rf_rmdir,
     .truncate  = rf_truncate,
     .rename    = rf_rename,
     .open      = rf_open,
