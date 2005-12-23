@@ -1119,7 +1119,7 @@ rf_mkdir(const char *path, mode_t mode) {
  * This calls can_rmdir? and rmdir() on FuseRoot.
  */
 static int
-rf_rmdir(const char *path, mode_t mode) {
+rf_rmdir(const char *path) {
   debug("rf_rmdir(%s)",path);
   /* Does it exist? */
   if (!RTEST(rf_call(path,is_directory,Qnil))) {
