@@ -7,13 +7,14 @@
 require 'fusefs_lib'
 
 module FuseFS
+  VERSION = '0.7.0'
   @running = true
   def FuseFS.run
     fd = FuseFS.fuse_fd
     io = IO.for_fd(fd)
     while @running
-      IO.select([io])
-      FuseFS.process
+      reads, foo, errs = IO.select([io],nil,[io])
+      break unless FuseFS.process
     end
   end
   def FuseFS.unmount

@@ -4,17 +4,18 @@
  * a Rubyish way.
  */
 
-/* #define DEBUG /* */
+// #define DEBUG
 
-#define FUSE_USE_VERSION 22
+#define FUSE_USE_VERSION 26
 #define _FILE_OFFSET_BITS 64
 
 #include <fuse.h>
+#include <fuse/fuse_lowlevel.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
-#include <sys/stat.h>
+// #include <sys/stat.h>
 #include <fcntl.h>
 #include <ruby.h>
 
@@ -67,7 +68,8 @@ file_openedP(const char *path) {
 /* When a file is created, the OS will first mknod it, then attempt to
  *   fstat it immediately. We get around this by using a static path name
  *   for the most recently mknodd'd path. */
-static char *created_file = NULL;
+static char   *created_file = NULL;
+static time_t  created_time = 0;
 
 /* Ruby Constants constants */
 VALUE cFuseFS      = Qnil; /* FuseFS class */
@@ -87,7 +89,12 @@ RMETHOD(id_delete,"delete");
 RMETHOD(id_mkdir,"mkdir");
 RMETHOD(id_rmdir,"rmdir");
 RMETHOD(id_touch,"touch");
+RMETHOD(id_chmod,"chmod");
 RMETHOD(id_size,"size");
+
+RMETHOD(id_mtime,"mtime");
+RMETHOD(id_ctime,"ctime");
+RMETHOD(id_atime,"atime");
 
 RMETHOD(is_directory,"directory?");
 RMETHOD(is_file,"file?");
@@ -103,6 +110,7 @@ RMETHOD(id_raw_read,"raw_read");
 RMETHOD(id_raw_write,"raw_write");
 
 RMETHOD(id_dup,"dup");
+RMETHOD(id_to_i,"to_i");
 
 typedef unsigned long int (*rbfunc)();
 
@@ -219,6 +227,13 @@ rf_protected(VALUE args) {
   return rb_apply(FuseRoot,to_call,args);
 }
 
+static VALUE
+rf_int_protected(VALUE args) {
+  static VALUE empty_ary = Qnil;
+  if (empty_ary == Qnil) empty_ary = rb_ary_new();
+  return rb_apply(args,id_to_i,empty_ary);
+}
+
 #define rf_call(p,m,a) \
   rf_mcall(p,m, c_ ## m, a)
 
@@ -258,6 +273,38 @@ rf_mcall(const char *path, ID method, char *methname, VALUE arg) {
 
   return result;
 }
+
+/* 
+ * rf_getint:
+ *
+ * Used for: An integer wrapper around rf_call
+ */
+#define rf_intval(p,m,a) \
+  rf_mintval(p,m, c_ ## m, a)
+
+static int
+rf_mintval(const char *path,ID method,char *methname,int def) {
+  VALUE arg = rf_mcall(path,method,methname,Qnil);
+  VALUE retval;
+  int   error;
+  if (FIXNUM_P(arg)) {
+    return rb_fix2int(arg);
+  } else if (RTEST(arg)) {
+    if (!rb_respond_to(arg,id_to_i)) {
+      return def;
+    }
+
+    retval = rb_protect(rf_int_protected, arg, &error);
+   
+    /* Did it error? */
+    if (error) return def;
+
+    return rb_num2long(retval);
+  } else {
+    return def;
+  }
+}
+
 /* rf_getattr
  *
  * Used when: 'ls', and before opening a file.
@@ -267,6 +314,7 @@ rf_mcall(const char *path, ID method, char *methname, VALUE arg) {
  *   at a directory or file. The permissions attributes
  *   will be 777 (dirs) and 666 (files) xor'd with FuseFS.umask
  */
+
 static int
 rf_getattr(const char *path, struct stat *stbuf) {
   /* If it doesn't exist, it doesn't exist. Simple as that. */
@@ -285,9 +333,9 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_nlink = 1;
     stbuf->st_uid = getuid();
     stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
+    stbuf->st_mtime = rf_intval(path,id_mtime,init_time);
+    stbuf->st_atime = rf_intval(path,id_atime,init_time);
+    stbuf->st_ctime = rf_intval(path,id_ctime,init_time);
     return 0;
   }
 
@@ -301,9 +349,9 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_size = 0;
     stbuf->st_uid = getuid();
     stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
+    stbuf->st_mtime = created_time;
+    stbuf->st_atime = created_time;
+    stbuf->st_ctime = created_time;
     return 0;
   }
   debug(" no.\n");
@@ -356,9 +404,9 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_size = 4096;
     stbuf->st_uid = getuid();
     stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
+    stbuf->st_mtime = rf_intval(path,id_mtime,init_time);
+    stbuf->st_atime = rf_intval(path,id_atime,init_time);
+    stbuf->st_ctime = rf_intval(path,id_ctime,init_time);
     return 0;
   } else if (RTEST(rf_call(path, is_file,Qnil))) {
     VALUE rsize;
@@ -371,16 +419,12 @@ rf_getattr(const char *path, struct stat *stbuf) {
       stbuf->st_mode |= 0111;
     }
     stbuf->st_nlink = 1 + file_openedP(path);
-    if (RTEST(rsize = rf_call(path,id_size,Qnil)) && FIXNUM_P(rsize)) {
-      stbuf->st_size = FIX2LONG(rsize);
-    } else {
-      stbuf->st_size = 0;
-    }
+    stbuf->st_size = rf_intval(path,id_size,0);
     stbuf->st_uid = getuid();
     stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
+    stbuf->st_mtime = rf_intval(path,id_mtime,init_time);
+    stbuf->st_atime = rf_intval(path,id_atime,init_time);
+    stbuf->st_ctime = rf_intval(path,id_ctime,init_time);
     return 0;
   }
   debug(" nonexistant.\n");
@@ -553,6 +597,7 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
     free(created_file);
 
   created_file = strdup(path);
+  created_time = time(NULL);
 
   return 0;
 }
@@ -791,6 +836,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     if (created_file && (strcasecmp(created_file,path) == 0)) {
       free(created_file);
       created_file = NULL;
+      created_time = 0;
     }
     return 0;
   } else {
@@ -881,6 +927,20 @@ rf_release(const char *path, struct fuse_file_info *fi) {
     free(ptr);
   }
 
+  return 0;
+}
+
+/* rf_chmod
+ *
+ * Used when: A program tries to modify objects permissions
+ *
+ * As there is no support for file permissions, just stub it to make
+ * other applications (like cp) happy.
+ */
+static int
+rf_chmod(const char *path, mode_t mode) {
+  VALUE set_mode = INT2NUM((int) (mode & 0x7FFF));
+  rf_call(path,id_chmod,set_mode);
   return 0;
 }
 
@@ -1284,6 +1344,7 @@ static struct fuse_operations rf_oper = {
     .rmdir     = rf_rmdir,
     .truncate  = rf_truncate,
     .rename    = rf_rename,
+    .chmod     = rf_chmod,
     .open      = rf_open,
     .release   = rf_release,
     .utime     = rf_touch,
@@ -1437,7 +1498,10 @@ rf_fd(VALUE self) {
  */
 VALUE
 rf_process(VALUE self) {
-  fusefs_process();
+  if (fusefs_process()) {
+    return Qtrue;
+  }
+  return Qfalse;
 }
 
 
@@ -1465,6 +1529,27 @@ rf_gid(VALUE self) {
   return INT2NUM(fd);
 }
 
+struct const_int {
+  char *name;
+  int val;
+};
+
+struct const_int constvals[] = {
+  { "S_ISUID", S_ISUID },
+  { "S_ISGID", S_ISGID },
+  { "S_ISVTX", S_ISVTX },
+  { "S_IRUSR", S_IRUSR },
+  { "S_IWUSR", S_IWUSR },
+  { "S_IXUSR", S_IXUSR },
+  { "S_IRGRP", S_IRGRP },
+  { "S_IWGRP", S_IWGRP },
+  { "S_IXGRP", S_IXGRP },
+  { "S_IROTH", S_IROTH },
+  { "S_IWOTH", S_IWOTH },
+  { "S_IXOTH", S_IXOTH },
+  { NULL, 0 }
+};
+
 /* Init_fusefs_lib()
  *
  * Used by: Ruby, to initialize FuseFS.
@@ -1474,6 +1559,8 @@ rf_gid(VALUE self) {
  */
 void
 Init_fusefs_lib() {
+  struct const_int *vals;
+
   opened_head = NULL;
   init_time = time(NULL);
 
@@ -1498,6 +1585,10 @@ Init_fusefs_lib() {
   rb_define_singleton_method(cFuseFS,"handle_editor",   (rbfunc) rf_handle_editor, 1);
   rb_define_singleton_method(cFuseFS,"handle_editor=",  (rbfunc) rf_handle_editor, 1);
 
+  for (vals = constvals; vals->name; vals++) {
+    rb_define_const(cFuseFS, vals->name, INT2NUM(vals->val));
+  }
+
 #undef RMETHOD
 #define RMETHOD(name,cstr) \
   name = rb_intern(cstr);
@@ -1509,7 +1600,12 @@ Init_fusefs_lib() {
   RMETHOD(id_mkdir,"mkdir");
   RMETHOD(id_rmdir,"rmdir");
   RMETHOD(id_touch,"touch");
+  RMETHOD(id_chmod,"chmod");
   RMETHOD(id_size,"size");
+
+  RMETHOD(id_mtime,"mtime");
+  RMETHOD(id_ctime,"ctime");
+  RMETHOD(id_atime,"atime");
 
   RMETHOD(is_directory,"directory?");
   RMETHOD(is_file,"file?");
@@ -1525,4 +1621,5 @@ Init_fusefs_lib() {
   RMETHOD(id_raw_write,"raw_write");
 
   RMETHOD(id_dup,"dup");
+  RMETHOD(id_to_i,"to_i");
 }

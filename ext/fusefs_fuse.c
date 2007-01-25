@@ -3,10 +3,11 @@
 /* This is rewriting most of the things that occur
  * in fuse_main up through fuse_loop */
 
-#define FUSE_USE_VERSION 22
+#define FUSE_USE_VERSION 26
 #define _FILE_OFFSET_BITS 64
 
 #include <fuse.h>
+#include <fuse/fuse_lowlevel.h>
 /* #include "fuse_i.h"
 #include "fuse_compat.h"
 #include "fuse_kernel.h"
@@ -25,24 +26,32 @@
 #include <signal.h>
 
 struct fuse * fuse_instance = NULL;
-static unsigned int fusefd;
+static struct fuse_chan *fusech;
 static char *mounted_at = NULL;
 
 static int set_one_signal_handler(int signal, void (*handler)(int));
 
 int fusefs_fd() {
-  return fusefd;
+  int ret;
+  struct fuse_chan *ch;
+  struct fuse_session *se;
+  if (fuse_instance == NULL) return -1;
+  se = fuse_get_session(fuse_instance);
+  ch = fuse_session_next_chan(se, NULL);
+  ret = fuse_chan_fd(ch);
+  return ret;
 }
 
 int
 fusefs_unmount() {
-  if (fuse_instance)
-    fuse_destroy(fuse_instance);
+  if (fuse_instance == NULL) return;
+  if (mounted_at && fusech) {
+    fuse_unmount(mounted_at, fusech);
+    free(mounted_at);
+  }
+  mounted_at = NULL;
+  fuse_destroy(fuse_instance);
   fuse_instance = NULL;
-  if (mounted_at)
-    fuse_unmount(mounted_at);
-  free(mounted_at);
-  fusefd = -1;
 }
 
 static void
@@ -57,34 +66,9 @@ fusefs_setup(char *mountpoint, const struct fuse_operations *op, char *opts) {
   char fuse_new_opts[1024];
   char fuse_mount_opts[1024];
   char nopts[1024];
+  char *fargv[] = { "fluffypinkslippers", "-o", opts, NULL };
+  struct fuse_args fargs = FUSE_ARGS_INIT(3, fargv);
 
-  char *cur;
-  char *ptr;
-
-  fuse_new_opts[0] = '\0';
-  fuse_mount_opts[0] = '\0';
-
-  for (cur=opts;cur;cur = ptr) {
-    ptr = strchr(cur,',');
-    if (ptr) *(ptr++) = '\0';
-    if (fuse_is_lib_option(cur)) {
-      if (fuse_new_opts[0]) {
-        strcpy(nopts,fuse_new_opts);
-        snprintf(fuse_new_opts,1024,"%s,%s",nopts,cur);
-      } else {
-        snprintf(fuse_new_opts,1024,"%s",cur);
-      }
-    } else {
-      if (fuse_mount_opts[0]) {
-        strcpy(nopts,fuse_mount_opts);
-        snprintf(fuse_mount_opts,1024,"%s,%s",nopts,cur);
-      } else {
-        snprintf(fuse_mount_opts,1024,"%s",cur);
-      }
-    }
-  }
-
-  fusefd = -1;
   if (fuse_instance != NULL) {
     return 0;
   }
@@ -93,10 +77,10 @@ fusefs_setup(char *mountpoint, const struct fuse_operations *op, char *opts) {
   }
 
   /* First, mount us */
-  fusefd = fuse_mount(mountpoint, fuse_mount_opts[0] ? fuse_mount_opts : NULL);
-  if (fusefd == -1) return 0;
+  fusech = fuse_mount(mountpoint, &fargs);
+  if (fusech == NULL) return 0;
 
-  fuse_instance = fuse_new(fusefd, fuse_new_opts[0] ? fuse_new_opts : NULL, op, sizeof(*op));
+  fuse_instance = fuse_new(fusech, &fargs, op, sizeof(*op), NULL);
   if (fuse_instance == NULL)
     goto err_unmount;
 
@@ -114,8 +98,10 @@ fusefs_setup(char *mountpoint, const struct fuse_operations *op, char *opts) {
   return 1;
 err_destroy:
   fuse_destroy(fuse_instance);
+  fuse_instance = NULL;
 err_unmount:
-  fuse_unmount(mountpoint);
+  fuse_unmount(mountpoint, fusech);
+  mountpoint = NULL;
   return 0;
 }
 

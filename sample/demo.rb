@@ -3,6 +3,24 @@ include FuseFS
 
 root = MetaDir.new
 
+def root.chmod(path,args)
+  STDERR.puts "You want me to chmod to #{args}?"
+  true
+end
+
+# All files were modified ... Yesterday!
+def root.mtime(path)
+  Time.now - 86400
+end
+
+def root.ctime(path)
+  Time.now - 86400
+end
+
+def root.atime(path)
+  Time.now - 86400
+end
+
 if (ARGV.size != 1)
   puts "Usage: #{$0} <directory>"
   exit
@@ -88,6 +106,6 @@ root.mkdir("/#{ENV['USER']}",DirLink.new(ENV['HOME']))
 # Set the root FuseFS
 FuseFS.set_root(root)
 
-FuseFS.mount_under(dirname)
+FuseFS.mount_under(dirname,"allow_root")
 
 FuseFS.run # This doesn't return until we're unmounted.
