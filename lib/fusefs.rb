@@ -40,10 +40,57 @@ module FuseFS
     def initialize
       @subdirs  = Hash.new(nil)
       @files    = Hash.new(nil)
+      @times    = Hash.new(nil)
+      @ctime    = Time.now
+      @mtime    = Time.now
+      @atime    = Time.now
+    end
+
+    def size(path)
+      base, rest = split_path(path)
+      case
+      when base.nil?
+        default
+      when rest
+        @subdirs[base].size(rest)
+      when @files.has_key?(base)
+        @files[base].to_s.size
+      else
+        @subdirs[base].size(rest)
+      end
+    end
+
+    def time(path,sym,index,default)
+      base, rest = split_path(path)
+      case
+      when base.nil?
+        default
+      when rest
+        @subdirs[base].respond_to?(sym) ? @subdirs[base].send(sym,path) : default
+      when @files.has_key?(base)
+        if @files[base].respond_to?(sym)
+          @files[base].send(sym)
+        else
+          @times[base][index]
+        end
+      else
+        @subdirs[base].respond_to?(sym) ? @subdirs[base].send(sym,path) : default
+      end
+    end
+
+    def atime(path)
+      time(path,:atime,0,@atime)
+    end
+    def ctime(path)
+      time(path,:ctime,1,@ctime)
+    end
+    def mtime(path)
+      time(path,:mtime,2,@mtime)
     end
 
     # Contents of directory.
     def contents(path)
+      @atime = Time.now
       base, rest = split_path(path)
       case
       when base.nil?
@@ -92,6 +139,7 @@ module FuseFS
       when base.nil?
         nil
       when rest.nil?
+        @times[base][0] = Time.now
         @files[base].to_s
       when ! @subdirs.has_key?(base)
         nil
@@ -121,6 +169,12 @@ module FuseFS
       when base.nil?
         false
       when rest.nil?
+        if @files.has_key?(base)
+          @times[base][2] = Time.now # mtime
+          @times[base][0] = Time.now # atime
+        else
+          @times[base] = [Time.now,Time.now,Time.now]
+        end
         @files[base] = file
       when ! @subdirs.has_key?(base)
         false
@@ -152,10 +206,13 @@ module FuseFS
       when rest.nil?
         # Delete it.
         @files.delete(base)
+        @times.delete(base)
+        @mtime = Time.now
       when ! @subdirs.has_key?(base)
         nil
       else
         @subdirs[base].delete(rest)
+        @mtime = Time.now
       end
     end
 
@@ -180,8 +237,9 @@ module FuseFS
       when base.nil?
         false
       when rest.nil?
-        dir ||= MetaDir.new
+        dir ||= self.class.new
         @subdirs[base] = dir
+        @mtime = Time.now
         true
       when ! @subdirs.has_key?(base)
         false
@@ -207,17 +265,17 @@ module FuseFS
     end
     def rmdir(path)
       base, rest = split_path(path)
-      dir ||= MetaDir.new
       case
       when base.nil?
         false
       when rest.nil?
         @subdirs.delete(base)
+        @mtime = Time.now
         true
       when ! @subdirs.has_key?(base)
         false
       else
-        @subdirs[base].rmdir(rest,dir)
+        @subdirs[base].rmdir(rest)
       end
     end
   end

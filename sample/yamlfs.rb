@@ -6,7 +6,7 @@ include FuseFS
 
 require 'yaml'
 
-class YAMLFS < FuseFS::FuseDir
+class YAMLFS < FuseFS::MetaDir
   def initialize(filename)
     @filename = filename
     begin

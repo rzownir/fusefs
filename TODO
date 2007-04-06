@@ -1,6 +1,13 @@
 TODO for FuseFS
 ===============
 
+- Fix rename when using raw_* functions. I've added raw_rename, but we need
+  to add better solutions using raw_read and raw_write. Also when "renaming"
+  an editor file.
+
+For future consideration
+========================
+
 - Problem with editors: vim attempts to create and then delete a numbered file.
   This can be an issue if the filename (all digits) is reported as not valid.
 
@@ -9,3 +16,4 @@ TODO for FuseFS
 - Tests, more tests, and unit tests!
 
 - Consider FIFOs? We can use FIFOs to mimic TCP internet, if we do this right.
+

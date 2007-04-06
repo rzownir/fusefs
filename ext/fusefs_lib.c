@@ -108,6 +108,7 @@ RMETHOD(id_raw_open,"raw_open");
 RMETHOD(id_raw_close,"raw_close");
 RMETHOD(id_raw_read,"raw_read");
 RMETHOD(id_raw_write,"raw_write");
+RMETHOD(id_raw_rename,"raw_rename");
 
 RMETHOD(id_dup,"dup");
 RMETHOD(id_to_i,"to_i");
@@ -409,7 +410,6 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_ctime = rf_intval(path,id_ctime,init_time);
     return 0;
   } else if (RTEST(rf_call(path, is_file,Qnil))) {
-    VALUE rsize;
     debug(" file.\n");
     stbuf->st_mode = S_IFREG | 0444;
     if (RTEST(rf_call(path,can_write,Qnil))) {
@@ -1019,14 +1019,18 @@ rf_rename(const char *path, const char *dest) {
     }
   } else {
     VALUE body = rf_call(path,id_read_file,Qnil);
-    if (TYPE(body) != T_STRING) {
-      /* We just write a null file, then. Ah well. */
-      VALUE newstr = rb_str_new2("");
-      rf_call(path,id_delete,Qnil);
-      rf_call(dest,id_write_to,newstr);
+    if (rb_respond_to(FuseRoot,id_raw_rename)) {
+        rf_call(path,id_raw_rename,rb_str_new2(dest));
     } else {
-      rf_call(path,id_delete,Qnil);
-      rf_call(dest,id_write_to,body);
+      if (TYPE(body) != T_STRING) {
+        /* We just write a null file, then. Ah well. */
+        VALUE newstr = rb_str_new2("");
+        rf_call(path,id_delete,Qnil);
+        rf_call(dest,id_write_to,newstr);
+      } else {
+        rf_call(path,id_delete,Qnil);
+        rf_call(dest,id_write_to,body);
+      }
     }
   }
   return 0;
@@ -1619,6 +1623,7 @@ Init_fusefs_lib() {
   RMETHOD(id_raw_close,"raw_close");
   RMETHOD(id_raw_read,"raw_read");
   RMETHOD(id_raw_write,"raw_write");
+  RMETHOD(id_raw_rename,"raw_rename");
 
   RMETHOD(id_dup,"dup");
   RMETHOD(id_to_i,"to_i");

@@ -3,24 +3,6 @@ include FuseFS
 
 root = MetaDir.new
 
-def root.chmod(path,args)
-  STDERR.puts "You want me to chmod to #{args}?"
-  true
-end
-
-# All files were modified ... Yesterday!
-def root.mtime(path)
-  Time.now - 86400
-end
-
-def root.ctime(path)
-  Time.now - 86400
-end
-
-def root.atime(path)
-  Time.now - 86400
-end
-
 if (ARGV.size != 1)
   puts "Usage: #{$0} <directory>"
   exit
@@ -67,20 +49,28 @@ end
 
 class Counter
   def initialize
-    @counter = 0
+    @counter = 1
   end
   def to_s
+    f = @counter.to_s + "\n"
     @counter += 1
-    @counter.to_s + "\n"
+    f
+  end
+  def size
+    @counter.to_s.size
   end
 end
 
 class Randwords
   def initialize(*ary)
     @ary = ary.flatten
+    @size = ary.sort_by { |i| i.size }.last.size
   end
   def to_s
     @ary[rand(@ary.size)].to_s + "\n"
+  end
+  def size
+    @size
   end
 end
 
