@@ -4,6 +4,9 @@ class HelloDir
   def contents(path)
     ['hello.txt']
   end
+  def size(path)
+    read_file(path).size
+  end
   def file?(path)
     path == '/hello.txt'
   end
